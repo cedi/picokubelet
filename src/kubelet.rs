@@ -61,15 +61,18 @@ pub async fn bootstrap(client: &SharedClient, identity: &NodeIdentity) -> NodeCo
 }
 
 async fn anchor_clock(client: &SharedClient) {
-    info!("anchoring wall clock from k3s server time");
+    info!("anchoring wall clock from k3s (we have no RTC, only vibes)");
     let mut c = client.lock().await;
     match c.get("/version").await {
         Ok(resp) => {
-            info!("k3s version probe: HTTP {}", resp.status);
+            info!("k3s version probe: HTTP {} (server lives)", resp.status);
             if let Some(date) = resp.header("Date") {
                 if let Some(unix) = parse_http_date(date) {
                     set_wall_clock(unix);
-                    info!("wall clock anchored: {} unix ({})", unix, date);
+                    info!(
+                        "wall clock anchored: {} unix ({}) — time exists now",
+                        unix, date
+                    );
                 } else {
                     warn!("could not parse Date header: {}", date);
                 }
@@ -96,12 +99,15 @@ async fn register_node(client: &SharedClient, identity: &NodeIdentity) {
         warn!("node body build failed");
         return;
     }
-    info!("POST /api/v1/nodes (body: {} bytes)", node_body.len());
+    info!(
+        "POST /api/v1/nodes (body: {} bytes — a bold introduction)",
+        node_body.len()
+    );
 
     let mut c = client.lock().await;
     match c.post("/api/v1/nodes", node_body.as_bytes()).await {
         Ok(resp) => match resp.status {
-            201 => info!("node registered ({})", identity.name),
+            201 => info!("node registered ({}) — control plane has accepted the bit", identity.name),
             409 => info!("node already exists, that's fine"),
             other => warn!(
                 "unexpected status {} on Node POST: {}",
@@ -124,7 +130,7 @@ async fn create_lease(client: &SharedClient) {
         warn!("lease body build failed");
         return;
     }
-    info!("POST .../leases (initial)");
+    info!("POST .../leases (initial — the contract)");
 
     let mut c = client.lock().await;
     match c
@@ -135,7 +141,7 @@ async fn create_lease(client: &SharedClient) {
         .await
     {
         Ok(resp) => match resp.status {
-            201 => info!("lease created"),
+            201 => info!("lease created (we are now legally a node)"),
             409 => info!("lease already exists, will renew via PUT"),
             other => warn!("unexpected status {} on Lease POST", other),
         },
@@ -166,9 +172,13 @@ async fn push_initial_status(
         return;
     }
     info!(
-        "PATCH {} (free heap {} B, MemoryPressure={})",
-        identity.status_path.as_str(),
+        "PATCH /status (heap: {} B, vibes: {}, MemoryPressure={}) [initial]",
         free,
+        if tracker.memory_pressure.value {
+            "concerning"
+        } else {
+            "immaculate"
+        },
         tracker.memory_pressure.value,
     );
 
@@ -179,7 +189,7 @@ async fn push_initial_status(
             .await
         {
             Ok(resp) => match resp.status {
-                200 => info!("status updated"),
+                200 => info!("status updated (we are observably alive)"),
                 other => warn!(
                     "status PATCH returned {}: {}",
                     other,

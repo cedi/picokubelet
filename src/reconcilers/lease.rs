@@ -13,9 +13,35 @@ use crate::led;
 use crate::net::client::SharedClient;
 use crate::wallclock::unix_now_secs;
 
+/// Drop a flavor aside on every Nth successful lease renewal. The other
+/// (N-1) lines are still numbered so loop progress is visible at a glance.
+const FLAVOR_EVERY_N: u32 = 10;
+
+/// Static flash strings — no heap, no formatting. Rotated by the renewal
+/// counter so a long-running node eventually cycles through the whole bit.
+static FLAVOR_LINES: &[&str] = &[
+    "achieved enlightenment briefly. lost it.",
+    "still here. unfortunately.",
+    "etcd has seen things. I have not.",
+    "no pods today. there are never pods.",
+    "considered drifting NotReady on purpose. didn't.",
+    "control plane noticed me, said nothing.",
+    "wondering what 'Ready' really means.",
+    "the heap is fine. I asked it.",
+    "kube-state-metrics, do you read me?",
+    "I exist therefore I PATCH.",
+    "imagined being scheduled once. it was beautiful.",
+    "another tick of the great reconciliation.",
+    "node-lifecycle-controller and I have an understanding.",
+    "if a node renews in a forest and no pod is bound to it...",
+    "still cattle, never pets. except for the name.",
+    "kubelet (allegedly).",
+];
+
 #[embassy_executor::task]
 pub async fn lease_reconciler(client: &'static SharedClient, identity: NodeIdentity) -> ! {
     let mut healthy = false;
+    let mut renewal_count: u32 = 0;
     loop {
         Timer::after(Duration::from_secs(LEASE_RENEW_PERIOD_SECS)).await;
 
@@ -43,7 +69,13 @@ pub async fn lease_reconciler(client: &'static SharedClient, identity: NodeIdent
 
         match renew_status {
             Some(200) => {
-                info!("lease renewed");
+                renewal_count = renewal_count.wrapping_add(1);
+                if renewal_count % FLAVOR_EVERY_N == 0 {
+                    let idx = (renewal_count / FLAVOR_EVERY_N) as usize % FLAVOR_LINES.len();
+                    info!("lease renewed (#{}, {})", renewal_count, FLAVOR_LINES[idx]);
+                } else {
+                    info!("lease renewed (#{})", renewal_count);
+                }
                 if !healthy {
                     led::set(led::LedPattern::Healthy);
                     healthy = true;
@@ -52,7 +84,7 @@ pub async fn lease_reconciler(client: &'static SharedClient, identity: NodeIdent
                 }
             }
             Some(404) => {
-                warn!("lease vanished, recreating");
+                warn!("lease vanished, recreating (someone deleted my contract)");
                 let mut c = client.lock().await;
                 let _ = c
                     .post(

@@ -72,13 +72,13 @@ async fn main(spawner: Spawner) -> ! {
     // fails. The task defaults to Booting after self-test.
     spawner.spawn(led::led_task(peripherals.RMT, peripherals.GPIO21).unwrap());
 
-    info!("picokubelet booting on ESP32-S3");
-    info!("identity: {}", NODE_NAME);
+    info!("picokubelet booting on ESP32-S3 (here we go again)");
+    info!("identity confirmed: {} (it me)", NODE_NAME);
     info!(
-        "target k3s api server: {}:{}",
+        "target k3s api server: {}:{} (the control plane, allegedly)",
         K3S_API_HOST, K3S_API_PORT_STR
     );
-    info!("joining SSID: {}", WIFI_SSID);
+    info!("joining SSID: {} (please be there)", WIFI_SSID);
 
     led::set(led::LedPattern::Connecting);
 
@@ -105,13 +105,16 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection_task(controller).unwrap());
     spawner.spawn(net_task(net_runner).unwrap());
 
-    info!("waiting for DHCP lease...");
+    info!("waiting for DHCP lease (the original lease)...");
     stack.wait_config_up().await;
     let cfg = stack
         .config_v4()
         .expect("ipv4 config missing after wait_config_up");
     let my_ip: Ipv4Addr = cfg.address.address();
-    info!("DHCP up: ip={} gw={:?}", cfg.address, cfg.gateway);
+    info!(
+        "DHCP up: ip={} gw={:?} (we are someone now)",
+        cfg.address, cfg.gateway
+    );
 
     // Resolve k3s endpoint.
     let port: u16 = K3S_API_PORT_STR.parse().expect("K3S_API_PORT must be u16");
@@ -141,7 +144,7 @@ async fn main(spawner: Spawner) -> ! {
     let tracker = kubelet::bootstrap(shared, &identity).await;
 
     info!(
-        "entering renewal loop (lease {}s, status {}s)",
+        "entering renewal loop (lease {}s, status {}s) — and so it begins",
         LEASE_RENEW_PERIOD_SECS, STATUS_UPDATE_PERIOD_SECS,
     );
     spawner.spawn(reconcilers::lease::lease_reconciler(shared, identity.clone()).unwrap());

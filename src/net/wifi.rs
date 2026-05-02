@@ -8,12 +8,12 @@ use crate::config::WIFI_SSID;
 #[embassy_executor::task]
 pub async fn connection_task(mut controller: WifiController<'static>) {
     loop {
-        info!("wifi: connecting to '{}'...", WIFI_SSID);
+        info!("wifi: knocking on '{}'...", WIFI_SSID);
         match controller.connect_async().await {
             Ok(info) => {
-                info!("wifi: associated ({:?})", info);
+                info!("wifi: associated ({:?}) — we have a layer 2", info);
                 let dc = controller.wait_for_disconnect_async().await.ok();
-                warn!("wifi: disconnected ({:?})", dc);
+                warn!("wifi: disconnected ({:?}) — back to the void", dc);
             }
             Err(e) => warn!("wifi: connect failed: {:?}", e),
         }

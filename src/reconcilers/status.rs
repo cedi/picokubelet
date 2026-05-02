@@ -60,9 +60,13 @@ async fn push_status(
         return;
     }
     info!(
-        "PATCH {} (free heap {} B, MemoryPressure={})",
-        identity.status_path.as_str(),
+        "PATCH /status (heap: {} B, vibes: {}, MemoryPressure={})",
         free,
+        if tracker.memory_pressure.value {
+            "concerning"
+        } else {
+            "immaculate"
+        },
         tracker.memory_pressure.value,
     );
 
@@ -73,7 +77,7 @@ async fn push_status(
             .await
         {
             Ok(resp) => match resp.status {
-                200 => info!("status updated"),
+                200 => info!("status updated (we are observably alive)"),
                 other => warn!(
                     "status PATCH returned {}: {}",
                     other,
