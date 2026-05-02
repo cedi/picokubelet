@@ -25,7 +25,7 @@ use crate::reconcilers::lease::RENEWAL_COUNT;
 use crate::wallclock::unix_now_secs;
 
 /// Sticky inter-tick state for the joke conditions. None of this needs to
-/// survive a reboot — it's only used to compute deltas and detect AP flips
+/// survive a reboot; it's only used to compute deltas and detect AP flips
 /// across status loop iterations.
 struct LoopState {
     custom: CustomCondTracker,
@@ -44,6 +44,10 @@ struct LoopState {
 
 /// Cycled on every successful /status PATCH. Same dramatic effect as
 /// "we are observably alive" but the logs don't go braindead at #500.
+/// Voice mixes the original deadpan with quotes from GLaDOS's "Still Alive"
+/// (Portal, J. Coulton) because the entire bit is "we are observably
+/// alive" repeated 8640 times a day; not pulling that thread would have
+/// been a crime.
 static STATUS_OK_LINES: &[&str] = &[
     "we are observably alive",
     "the cluster knows we exist",
@@ -51,6 +55,14 @@ static STATUS_OK_LINES: &[&str] = &[
     "still no notes from management",
     "free heap: marginally less",
     "our conditions are unchanged. spiritually too.",
+    "this was a triumph",
+    "i'm making a note here: huge success",
+    "still alive",
+    "i'm doing science and i'm still alive",
+    "i feel fantastic and i'm still alive",
+    "anyway, this cake is great",
+    "for the good of all of us, except the ones who are dead",
+    "while you're still alive",
 ];
 
 #[embassy_executor::task]
