@@ -38,6 +38,23 @@ embassy-net = { version = "0.9", features = [
 ] }
 embassy-futures = { version = "0.1" }
 
+# --- TLS ---
+# embedded-tls (TLS 1.3 only) used directly — no reqwless. The published
+# reqwless 0.14 hardcodes embedded-tls's `rustpki` feature on, which pulls
+# der-0.8 in a configuration that fails to compile. We don't need cert
+# parsing yet (verification is off for the home-lab dev loop), so we drop
+# both rustpki and webpki and assemble HTTP requests by hand on top of a
+# raw TLS stream. When we switch to real CA verification we'll move to
+# esp-rs/mbedtls-rs (proper SAN + hardware crypto), which is a larger
+# integration — Trng/SHA/RSA peripherals + RTC + matching esp-hal git rev.
+embedded-tls = { version = "0.18", default-features = false, features = ["log"] }
+embedded-io-async = { version = "0.7", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+# Xtensa LX7 doesn't have native u64 atomics; portable-atomic emulates them
+# via critical sections (already provided by esp-hal).
+portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
+
 # --- Utility ---
 static_cell = "2.1"
 heapless = "0.8"

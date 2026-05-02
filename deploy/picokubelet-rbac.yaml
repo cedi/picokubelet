@@ -1,0 +1,33 @@
+# picokubelet RBAC.
+#
+# Apply once to a cluster (k3s on the Pi), then mint a token to put in .env:
+#
+#   kubectl apply -f deploy/picokubelet-rbac.yaml
+#   kubectl -n kube-system create token picokubelet --duration=8760h
+#
+# Paste the JWT (starts with eyJ...) into .env as K3S_TOKEN= and reflash.
+#
+# Cluster-admin is lazy-mode for the home lab. The "real" kubelet flow uses
+# system:node + Node Authorizer + a client cert proven by the bootstrap CSR
+# flow. We'll get there; this gets us past auth so we can build the rest.
+#
+# To remove: kubectl delete -f deploy/picokubelet-rbac.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: picokubelet
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: picokubelet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: picokubelet
+  namespace: kube-system
