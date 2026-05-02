@@ -1,7 +1,7 @@
 //! Wire models for the Kubernetes resources picokubelet talks about.
 //!
 //! Each struct owns its own JSON serialization via `write_json`. We don't
-//! pull in serde — the bodies are short, fixed-shape, and the heapless
+//! pull in serde; the bodies are short, fixed-shape, and the heapless
 //! buffers we write into come pre-sized by the caller.
 
 use core::fmt::Write as FmtWrite;
@@ -15,7 +15,7 @@ use crate::wallclock::fmt_rfc3339;
 
 /// One custom condition row, ready to serialize: name + freshly evaluated
 /// status/reason/message + the previous transition timestamp (carried
-/// forward by the tracker — only the reconciler knows when it last
+/// forward by the tracker; only the reconciler knows when it last
 /// flipped).
 pub struct CustomCondEntry {
     pub name: &'static str,
@@ -130,7 +130,7 @@ impl LeaseBody {
 /// the API server already has from a previous PATCH gets updated in place;
 /// dropping a custom condition from this slice does NOT remove it from the
 /// stored object (would need an explicit JSON-patch remove for that, which
-/// we don't bother with — the set is fixed).
+/// we don't bother with (the set is fixed).
 pub struct NodeStatusPatch<'a> {
     pub tracker: &'a NodeCondTracker,
     pub custom: &'a [CustomCondEntry],
@@ -215,7 +215,7 @@ impl NodeStatusPatch<'_> {
     }
 }
 
-/// Wire model for the heap-free annotation PATCH (regular merge — the
+/// Wire model for the heap-free annotation PATCH (regular merge; the
 /// /status subresource silently drops metadata).
 pub struct HeapAnnotationPatch {
     pub free_bytes: usize,

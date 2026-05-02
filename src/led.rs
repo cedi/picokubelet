@@ -152,7 +152,7 @@ fn render_steady(pattern: LedPattern, elapsed_ms: u64) -> Color {
         LedPattern::Connecting => breathe(elapsed_ms, 667, 0, 0, LED_BRIGHTNESS_CAP),
         // ~0.33 Hz green: sleeping peacefully.
         LedPattern::Healthy => breathe(elapsed_ms, 3000, 0, LED_BRIGHTNESS_CAP, 0),
-        // States we don't drive yet — leave the LED dark so it's obvious
+        // States we don't drive yet, leave the LED dark so it's obvious
         // when the kubelet does eventually surface one of these.
         _ => Color::OFF,
     }

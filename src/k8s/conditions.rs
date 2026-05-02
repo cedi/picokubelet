@@ -122,7 +122,7 @@ impl CustomCondState {
 
 /// Inputs sampled once per status loop and fed to every evaluator. Keeping
 /// this as a plain struct of primitives means the eval_* fns are pure and
-/// easy to reason about — all the IO/atomics live in the reconciler.
+/// easy to reason about; all the IO/atomics live in the reconciler.
 pub struct CustomCondInputs {
     pub heap_free_bytes: usize,
     pub uptime_secs: u64,
@@ -164,7 +164,7 @@ impl CustomCondTracker {
 }
 
 // Evaluators are plain functions of CustomCondInputs. Order of branches
-// matters — Cursed beats everything in Vibes; ditto NewGhost over
+// matters: Cursed beats everything in Vibes; ditto NewGhost over
 // TimeSlipped in Haunted.
 
 pub fn eval_vibes(i: &CustomCondInputs) -> CustomCond {
@@ -250,7 +250,7 @@ pub fn eval_existential(i: &CustomCondInputs) -> CustomCond {
 
 pub fn eval_peckish(i: &CustomCondInputs) -> CustomCond {
     // Below MemoryPressure's threshold the real condition is louder, so we
-    // intentionally don't add a fourth "Starving" tier — Peckish saturates
+    // intentionally don't add a fourth "Starving" tier; Peckish saturates
     // at Hungry and lets MemoryPressure do the talking.
     if i.heap_free_bytes < MEMORY_PRESSURE_FREE_BYTES {
         return CustomCond {

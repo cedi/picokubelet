@@ -7,7 +7,7 @@ pub const WIFI_PSK: &str = env!("WIFI_PSK");
 
 // Node identity from .env (NODE_NAME), with a friendly default so the
 // build doesn't break if it's missing. Each board in the rack should get
-// its own. (German nodes get German names — once the Tamagotchi rack
+// its own. (German nodes get German names; once the Tamagotchi rack
 // ships there'll be at least one Günther / Heinrich / Brigitte each.)
 //
 // Kubernetes node names must match [a-z0-9.-]+, so umlauts get
@@ -44,5 +44,5 @@ pub const VIBES_CURSED_RECONNECTS: u32 = 3;
 pub const CAFFEINATED_FRESH_SECS: u64 = 600;
 // Anything more than this between consecutive status pushes is suspicious
 // enough to mark Haunted=TimeSlipped (compares wall-clock delta vs monotonic
-// delta — hits if someone re-anchors the wall clock mid-flight).
+// delta. Hits if someone re-anchors the wall clock mid-flight).
 pub const HAUNTED_SLIP_SECS: i64 = 5;

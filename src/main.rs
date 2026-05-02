@@ -1,9 +1,9 @@
-//! picokubelet — phase 4: register, stay Ready, and report honest health.
+//! picokubelet, phase 4: register, stay Ready, and report honest health.
 //!
 //! After Wi-Fi + DHCP + TLS to k3s:
 //!  1. GET /version once to anchor a wall clock (parsed from the Date header
 //!     because we don't have an RTC).
-//!  2. POST /api/v1/nodes with our Node spec — lying about CPU/memory.
+//!  2. POST /api/v1/nodes with our Node spec, lying about CPU/memory.
 //!  3. POST a Lease into kube-node-lease.
 //!  4. PATCH /nodes/{name}/status with fresh heartbeats + a heap-derived
 //!     MemoryPressure; PATCH /nodes/{name} with a free-heap annotation.
@@ -14,7 +14,7 @@
 //! fresh so kube-state-metrics and other second-order observers see a
 //! healthy node, not a node whose conditions are all 0001-01-01.
 //!
-//! Cert verification is still off — fine for the home lab, will become a
+//! Cert verification is still off. Fine for the home lab, will become a
 //! real CA + client cert in a later phase.
 
 #![no_std]
@@ -124,14 +124,14 @@ async fn main(spawner: Spawner) -> ! {
     let api_octets = api_host.octets();
     let api_smol = Ipv4Address::new(api_octets[0], api_octets[1], api_octets[2], api_octets[3]);
 
-    // TLS record buffers — static so the task arena stays small.
+    // TLS record buffers, static so the task arena stays small.
     const TLS_BUF: usize = 16 * 1024 + 256;
     static TLS_READ_BUF: StaticCell<[u8; TLS_BUF]> = StaticCell::new();
     static TLS_WRITE_BUF: StaticCell<[u8; TLS_BUF]> = StaticCell::new();
     let tls_read = TLS_READ_BUF.init([0u8; TLS_BUF]);
     let tls_write = TLS_WRITE_BUF.init([0u8; TLS_BUF]);
 
-    // Response scratch — the Node create reply can be ~6 KB.
+    // Response scratch. The Node create reply can be ~6 KB.
     static RESP_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
     let resp_buf = RESP_BUF.init([0u8; 8192]);
 
@@ -144,7 +144,7 @@ async fn main(spawner: Spawner) -> ! {
     let (tracker, custom) = kubelet::bootstrap(shared, &identity).await;
 
     info!(
-        "entering renewal loop (lease {}s, status {}s) — and so it begins",
+        "entering renewal loop (lease {}s, status {}s). and so it begins.",
         LEASE_RENEW_PERIOD_SECS, STATUS_UPDATE_PERIOD_SECS,
     );
     spawner.spawn(reconcilers::lease::lease_reconciler(shared, identity.clone()).unwrap());

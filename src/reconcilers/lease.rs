@@ -75,7 +75,7 @@ fn milestone_for(count: u32) -> Option<&'static MilestoneLine> {
         .find_map(|(n, line)| (*n == count).then_some(line))
 }
 
-/// Static flash strings — no heap, no formatting. Rotated by the renewal
+/// Static flash strings, no heap, no formatting. Rotated by the renewal
 /// counter so a long-running node eventually cycles through the whole bit.
 static FLAVOR_LINES: &[&str] = &[
     "achieved enlightenment briefly. lost it.",

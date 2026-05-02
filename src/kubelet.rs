@@ -79,7 +79,7 @@ async fn anchor_clock(client: &SharedClient) {
                 if let Some(unix) = parse_http_date(date) {
                     set_wall_clock(unix);
                     info!(
-                        "wall clock anchored: {} unix ({}) — time exists now",
+                        "wall clock anchored: {} unix ({}); time exists now",
                         unix, date
                     );
                 } else {
@@ -109,14 +109,14 @@ async fn register_node(client: &SharedClient, identity: &NodeIdentity) {
         return;
     }
     info!(
-        "POST /api/v1/nodes (body: {} bytes — a bold introduction)",
+        "POST /api/v1/nodes (body: {} bytes, a bold introduction)",
         node_body.len()
     );
 
     let mut c = client.lock().await;
     match c.post("/api/v1/nodes", node_body.as_bytes()).await {
         Ok(resp) => match resp.status {
-            201 => info!("node registered ({}) — control plane has accepted the bit", identity.name),
+            201 => info!("node registered ({}); control plane has accepted the bit", identity.name),
             409 => info!("node already exists, that's fine"),
             other => warn!(
                 "unexpected status {} on Node POST: {}",
@@ -139,7 +139,7 @@ async fn create_lease(client: &SharedClient) {
         warn!("lease body build failed");
         return;
     }
-    info!("POST .../leases (initial — the contract)");
+    info!("POST .../leases (initial: the contract)");
 
     let mut c = client.lock().await;
     match c

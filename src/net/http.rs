@@ -8,7 +8,7 @@ pub enum ApiError {
     BadResponse,
 
     /// HTTP 4xx the caller can recover from (e.g. 404 NotFound, 409
-    /// AlreadyExists). Body is not preserved here — callers that want it
+    /// AlreadyExists). Body is not preserved here; callers that want it
     /// should inspect the Response before turning it into an error.
     ClientError(u16),
 
