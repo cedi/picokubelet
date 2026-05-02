@@ -1,5 +1,3 @@
-> A Rust kubelet that runs on a microcontroller and registers with a real Kubernetes cluster as a worker node.
-
 # picokubelet
 
 <!-- TODO: insert kubectl get nodes screenshot showing the ESP32 in the list -->
@@ -8,9 +6,11 @@
 
 `picokubelet` is a Kubernetes kubelet, written in Rust, targeting the ESP32-S3. It boots, gets a DHCP lease over Ethernet, talks TLS to a real k3s API server, registers itself as a node, and renews its lease so the control plane keeps believing it. As far as the cluster is concerned, it is a worker.
 
-The hardware is a Waveshare ESP32-S3-ETH: an ESP32-S3R8 with a W5500 Ethernet controller on SPI, optionally PoE-powered. The control plane is a k3s instance on a Raspberry Pi. Nothing about that combination is unusual on its own; the unusual part is what's at the other end of the SPI bus.
+The hardware is a [Waveshare ESP32-S3-ETH]: an ESP32-S3R8 with a W5500 Ethernet controller on SPI, optionally PoE-powered. The control plane is a k3s instance on a Raspberry Pi. Nothing about that combination is unusual on its own; the unusual part is what's at the other end of the SPI bus.
 
 It exists because nobody had told the ESP32 it couldn't.
+
+[Waveshare ESP32-S3-ETH]: https://www.waveshare.com/esp32-s3-eth.htm
 
 ## What works and what's faked
 
