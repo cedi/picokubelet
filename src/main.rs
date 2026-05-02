@@ -31,7 +31,7 @@ use core::fmt::Write as FmtWrite;
 use core::net::Ipv4Addr;
 
 use embassy_executor::Spawner;
-use embassy_net::{Config as NetConfig, Ipv4Address, Stack, StackResources};
+use embassy_net::{Config as NetConfig, Ipv4Address, StackResources};
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -49,7 +49,7 @@ use crate::config::{
     K3S_API_HOST, K3S_API_PORT_STR, LEASE_DURATION_SECS, LEASE_RENEW_PERIOD_SECS,
     MEMORY_PRESSURE_FREE_BYTES, NODE_NAME, STATUS_UPDATE_PERIOD_SECS, WIFI_PSK, WIFI_SSID,
 };
-use crate::net::http::k8s_request;
+use crate::net::client::ApiClient;
 use crate::net::wifi::{connection_task, net_task};
 use crate::wallclock::{fmt_rfc3339, parse_http_date, set_wall_clock, unix_now_secs};
 
@@ -134,13 +134,11 @@ async fn main(spawner: Spawner) -> ! {
     static RESP_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
     let resp_buf = RESP_BUF.init([0u8; 8192]);
 
+    let mut client = ApiClient::new(stack, api_smol, port, rng, tls_read, tls_write, resp_buf);
+
     // 1) GET /version → anchor wall clock.
     info!("anchoring wall clock from k3s server time");
-    match k8s_request(
-        stack, api_smol, port, rng, tls_read, tls_write, "GET", "/version", None, resp_buf,
-    )
-    .await
-    {
+    match client.get("/version").await {
         Ok(resp) => {
             info!("k3s version probe: HTTP {}", resp.status);
             if let Some(date) = resp.header("Date") {
@@ -164,20 +162,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut node_body: HString<2048> = HString::new();
     build_node_body(&mut node_body, my_ip, unix_now_secs()).expect("node body build");
     info!("POST /api/v1/nodes (body: {} bytes)", node_body.len());
-    match k8s_request(
-        stack,
-        api_smol,
-        port,
-        rng,
-        tls_read,
-        tls_write,
-        "POST",
-        "/api/v1/nodes",
-        Some(node_body.as_bytes()),
-        resp_buf,
-    )
-    .await
-    {
+    match client.post("/api/v1/nodes", node_body.as_bytes()).await {
         Ok(resp) => match resp.status {
             201 => info!("node registered ({})", NODE_NAME),
             409 => info!("node already exists, that's fine"),
@@ -195,19 +180,12 @@ async fn main(spawner: Spawner) -> ! {
     let mut lease_body: HString<512> = HString::new();
     build_lease_body(&mut lease_body, unix_now_secs()).expect("lease body build");
     info!("POST .../leases (initial)");
-    match k8s_request(
-        stack,
-        api_smol,
-        port,
-        rng,
-        tls_read,
-        tls_write,
-        "POST",
-        "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases",
-        Some(lease_body.as_bytes()),
-        resp_buf,
-    )
-    .await
+    match client
+        .post(
+            "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases",
+            lease_body.as_bytes(),
+        )
+        .await
     {
         Ok(resp) => match resp.status {
             201 => info!("lease created"),
@@ -244,19 +222,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let mut tracker = NodeCondTracker::new(unix_now_secs());
-    push_status(
-        stack,
-        api_smol,
-        port,
-        rng,
-        tls_read,
-        tls_write,
-        &status_path,
-        &node_path,
-        &mut tracker,
-        resp_buf,
-    )
-    .await;
+    push_status(&mut client, &status_path, &node_path, &mut tracker).await;
     let mut last_status_update = unix_now_secs();
 
     // 5) Lease renewal loop. PATCH every LEASE_RENEW_PERIOD_SECS with a
@@ -276,49 +242,34 @@ async fn main(spawner: Spawner) -> ! {
             continue;
         }
 
-        match k8s_request(
-            stack,
-            api_smol,
-            port,
-            rng,
-            tls_read,
-            tls_write,
-            "PATCH",
-            &lease_path,
-            Some(body.as_bytes()),
-            resp_buf,
-        )
-        .await
-        {
-            Ok(resp) => match resp.status {
-                200 => {
-                    info!("lease renewed");
-                    if !healthy {
-                        led::set(led::LedPattern::Healthy);
-                        healthy = true;
-                    } else {
-                        led::set(led::LedPattern::Activity);
-                    }
+        let renew_status = match client.patch_merge(&lease_path, body.as_bytes()).await {
+            Ok(resp) => Some(resp.status),
+            Err(e) => {
+                warn!("lease renewal failed: {:?}", e);
+                None
+            }
+        };
+        match renew_status {
+            Some(200) => {
+                info!("lease renewed");
+                if !healthy {
+                    led::set(led::LedPattern::Healthy);
+                    healthy = true;
+                } else {
+                    led::set(led::LedPattern::Activity);
                 }
-                404 => {
-                    warn!("lease vanished, recreating");
-                    let _ = k8s_request(
-                        stack,
-                        api_smol,
-                        port,
-                        rng,
-                        tls_read,
-                        tls_write,
-                        "POST",
+            }
+            Some(404) => {
+                warn!("lease vanished, recreating");
+                let _ = client
+                    .post(
                         "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases",
-                        Some(body.as_bytes()),
-                        resp_buf,
+                        body.as_bytes(),
                     )
                     .await;
-                }
-                other => warn!("lease renewal returned {}", other),
-            },
-            Err(e) => warn!("lease renewal failed: {:?}", e),
+            }
+            Some(other) => warn!("lease renewal returned {}", other),
+            None => {}
         }
 
         // Status patch — slow cadence, or immediately on a condition flip.
@@ -328,19 +279,7 @@ async fn main(spawner: Spawner) -> ! {
         let flipped = tracker.memory_pressure.observe(mp_now, now);
         let due = now != 0 && now.saturating_sub(last_status_update) >= STATUS_UPDATE_PERIOD_SECS;
         if flipped || due {
-            push_status(
-                stack,
-                api_smol,
-                port,
-                rng,
-                tls_read,
-                tls_write,
-                &status_path,
-                &node_path,
-                &mut tracker,
-                resp_buf,
-            )
-            .await;
+            push_status(&mut client, &status_path, &node_path, &mut tracker).await;
             last_status_update = now;
         }
     }
@@ -349,18 +288,11 @@ async fn main(spawner: Spawner) -> ! {
 /// Send the two status-side PATCHes: conditions on /status (strategic
 /// merge), heap-free annotation on the main resource (regular merge —
 /// the /status subresource silently drops metadata).
-#[allow(clippy::too_many_arguments)]
 async fn push_status(
-    stack: Stack<'static>,
-    api_ip: Ipv4Address,
-    api_port: u16,
-    rng: Rng,
-    tls_read: &mut [u8],
-    tls_write: &mut [u8],
+    client: &mut ApiClient<'_>,
     status_path: &str,
     node_path: &str,
     tracker: &mut NodeCondTracker,
-    resp_buf: &mut [u8],
 ) {
     let now = unix_now_secs();
     let free = esp_alloc::HEAP.free();
@@ -377,20 +309,7 @@ async fn push_status(
         "PATCH {} (free heap {} B, MemoryPressure={})",
         status_path, free, tracker.memory_pressure.value,
     );
-    match k8s_request(
-        stack,
-        api_ip,
-        api_port,
-        rng,
-        tls_read,
-        tls_write,
-        "PATCH-STRATEGIC",
-        status_path,
-        Some(body.as_bytes()),
-        resp_buf,
-    )
-    .await
-    {
+    match client.patch_strategic(status_path, body.as_bytes()).await {
         Ok(resp) => match resp.status {
             200 => info!("status updated"),
             other => warn!(
@@ -406,20 +325,7 @@ async fn push_status(
     if build_annotation_body(&mut ann, free).is_err() {
         return;
     }
-    match k8s_request(
-        stack,
-        api_ip,
-        api_port,
-        rng,
-        tls_read,
-        tls_write,
-        "PATCH",
-        node_path,
-        Some(ann.as_bytes()),
-        resp_buf,
-    )
-    .await
-    {
+    match client.patch_merge(node_path, ann.as_bytes()).await {
         Ok(resp) if resp.status == 200 => {}
         Ok(resp) => warn!("annotation PATCH returned {}", resp.status),
         Err(e) => warn!("annotation PATCH failed: {:?}", e),
