@@ -1,0 +1,25 @@
+# Build artifacts
+/target/
+Cargo.lock.bak
+
+# Project-local toolchain (mise-managed)
+/.cargo-home/
+/.rustup-home/
+/.mise/
+
+# Secrets
+.env
+.env.local
+
+# espup export file (regenerated)
+/.export-esp
+/.export-esp.sh
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Per-user Claude Code state
+.claude/

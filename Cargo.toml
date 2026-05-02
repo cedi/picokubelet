@@ -1,0 +1,63 @@
+[package]
+name = "picokubelet"
+version = "0.1.0"
+edition = "2024"
+authors = ["Cedric Specht <cedric@specht-labs.de>"]
+description = "An ESP32-S3 that registers itself as a Kubernetes worker node. Glorious nonsense, real implementation."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cedi/picokubelet"
+publish = false
+
+[[bin]]
+name = "picokubelet"
+path = "src/main.rs"
+
+[dependencies]
+# --- Core esp-rs stack ---
+esp-hal = { version = "1.1", features = ["esp32s3", "unstable"] }
+# esp-rtos is the successor to esp-hal-embassy; provides the embassy
+# executor + time driver hooked into esp-hal timers.
+# DO NOT enable embassy-executor's arch-* features alongside this.
+esp-rtos = { version = "0.3", features = ["esp32s3", "embassy", "esp-radio", "log-04"] }
+esp-radio = { version = "0.18", features = ["esp32s3", "wifi", "unstable"] }
+esp-alloc = { version = "0.10" }
+esp-backtrace = { version = "0.19", features = ["esp32s3", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.5", features = ["esp32s3"] }
+esp-println = { version = "0.17", default-features = false, features = ["esp32s3", "log-04", "uart"] }
+
+# --- Embassy ---
+embassy-executor = { version = "0.10" }
+embassy-time = { version = "0.5" }
+embassy-sync = { version = "0.8" }
+embassy-net = { version = "0.9", features = [
+    "dhcpv4",
+    "medium-ethernet",
+    "proto-ipv4",
+    "tcp",
+    "dns",
+] }
+embassy-futures = { version = "0.1" }
+
+# --- Utility ---
+static_cell = "2.1"
+heapless = "0.8"
+log = "0.4"
+
+[profile.release]
+codegen-units = 1
+debug = 2          # symbols stay in .elf, stripped from binary by espflash
+debug-assertions = false
+incremental = false
+lto = "fat"
+opt-level = "s"    # size-optimize; flash is 16MB but link time matters
+overflow-checks = false
+
+[profile.dev]
+debug = 2
+opt-level = "s"
+overflow-checks = true
+lto = "off"
+
+# embassy-executor 0.10 reads task-arena size from this metadata block.
+[package.metadata.embassy-executor]
+task-arena-size = 65536

@@ -1,0 +1,20 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor --partition-table partitions.csv"
+rustflags = [
+  # esp-hal provides the linker scripts.
+  "-C", "link-arg=-nostartfiles",
+  "-C", "link-arg=-Tlinkall.x",
+  # Make the embassy-executor stack happy on Xtensa.
+  "-C", "link-arg=-Wl,--no-eh-frame-hdr",
+]
+
+[unstable]
+build-std = ["alloc", "core"]
+
+[env]
+# Used by esp-println / esp-backtrace for nicer logs, and by us for k3s creds
+# (loaded from .env via mise).
+ESP_LOG = "info"

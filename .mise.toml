@@ -1,0 +1,92 @@
+# Project-scoped toolchain. Nothing here should pollute the system.
+# After cloning: `mise trust && mise install && mise run bootstrap`
+
+[env]
+# Keep cargo and rustup state inside the repo so different projects don't fight.
+CARGO_HOME = "{{ config_root }}/.cargo-home"
+RUSTUP_HOME = "{{ config_root }}/.rustup-home"
+
+# Force the esp-rs Xtensa Rust fork even if a parent shell has
+# RUSTUP_TOOLCHAIN=stable lying around. Matches rust-toolchain.toml.
+RUSTUP_TOOLCHAIN = "esp"
+
+# bindgen / clang-sys (used transitively by some esp crates) needs to find
+# the libclang shipped with the esp-rs toolchain.
+LIBCLANG_PATH = "{{ config_root }}/.rustup-home/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib"
+
+# Make the esp Xtensa rustc/cargo discoverable BEFORE any system Rust on PATH
+# (Homebrew, ~/.cargo/bin, etc.) — those don't understand Xtensa and will ICE
+# trying to resolve the target. Followed by mise's cargo bin and the xtensa-elf
+# GCC (needed for linking).
+_.path = [
+    "{{ config_root }}/.rustup-home/toolchains/esp/bin",
+    "{{ config_root }}/.cargo-home/bin",
+    "{{ config_root }}/.rustup-home/toolchains/esp/xtensa-esp-elf/esp-15.2.0_20250920/xtensa-esp-elf/bin",
+]
+
+# Auto-load secrets from .env (gitignored).
+_.file = ".env"
+
+[tools]
+# espup installs the esp-rs Xtensa Rust fork into RUSTUP_HOME (which we've
+# pointed at the project). espflash flashes the firmware over USB.
+# Both come from GitHub releases as prebuilt binaries — no source compile,
+# no host Rust toolchain required to bootstrap.
+"github:esp-rs/espup"    = "0.17.1"
+"github:esp-rs/espflash" = "4.4.0"
+
+[tasks.bootstrap]
+description = "Install the esp-rs Xtensa toolchain into the project-local rustup home"
+run = """
+set -euo pipefail
+mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
+espup install \\
+  --targets esp32s3 \\
+  --export-file "{{ config_root }}/.export-esp.sh"
+echo "Toolchain installed. The 'esp' channel is now resolvable inside this repo."
+"""
+
+[tasks.build]
+description = "Compile firmware for ESP32-S3 (release)"
+run = "cargo build --release"
+
+[tasks.build-debug]
+description = "Compile firmware for ESP32-S3 (dev profile, faster builds)"
+run = "cargo build"
+
+[tasks.flash]
+description = "Flash the latest release build to the ESP — no monitor"
+run = "espflash flash --partition-table partitions.csv target/xtensa-esp32s3-none-elf/release/picokubelet"
+depends = ["build"]
+
+[tasks.monitor]
+description = "Open serial monitor on the connected ESP (Ctrl-C to exit, Ctrl-R to reset)"
+run = "espflash monitor --elf target/xtensa-esp32s3-none-elf/release/picokubelet"
+
+[tasks.run]
+description = "Flash AND monitor — full dev loop in one step"
+run = "cargo run --release"
+
+[tasks.erase]
+description = "Erase the entire flash on the connected ESP (factory reset)"
+run = "espflash erase-flash"
+
+[tasks.check]
+description = "Type-check without producing a binary (fast feedback)"
+run = "cargo check --release"
+
+[tasks.fmt]
+description = "Format Rust sources"
+run = "cargo fmt --all"
+
+[tasks.clippy]
+description = "Lint with clippy"
+run = "cargo clippy --release -- -D warnings"
+
+[tasks.clean]
+description = "Wipe build artifacts (does NOT touch the toolchain)"
+run = "cargo clean"
+
+[tasks.board-info]
+description = "Print the connected ESP's chip info, MAC, flash size"
+run = "espflash board-info"

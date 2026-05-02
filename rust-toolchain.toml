@@ -1,0 +1,5 @@
+# The "esp" channel is the esp-rs Xtensa Rust fork installed by `espup install`.
+# Run `mise run bootstrap` once after `mise install` to populate it.
+[toolchain]
+channel = "esp"
+components = ["rust-src"]
