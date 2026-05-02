@@ -10,8 +10,18 @@ use core::net::Ipv4Addr;
 use heapless::String as HString;
 
 use crate::config::{LEASE_DURATION_SECS, NODE_NAME};
-use crate::k8s::conditions::NodeCondTracker;
+use crate::k8s::conditions::{CustomCond, NodeCondTracker};
 use crate::wallclock::fmt_rfc3339;
+
+/// One custom condition row, ready to serialize: name + freshly evaluated
+/// status/reason/message + the previous transition timestamp (carried
+/// forward by the tracker — only the reconciler knows when it last
+/// flipped).
+pub struct CustomCondEntry {
+    pub name: &'static str,
+    pub current: CustomCond,
+    pub transitioned_at: u64,
+}
 
 /// Wire model for the Node resource we register at boot.
 pub struct NodeRegistration {
@@ -114,13 +124,21 @@ impl LeaseBody {
 }
 
 /// Wire model for the Node status subresource PATCH (strategic merge).
+///
+/// `custom` is appended *after* the four real conditions. Strategic merge
+/// uses `type` as the merge key for status.conditions, so any custom type
+/// the API server already has from a previous PATCH gets updated in place;
+/// dropping a custom condition from this slice does NOT remove it from the
+/// stored object (would need an explicit JSON-patch remove for that, which
+/// we don't bother with — the set is fixed).
 pub struct NodeStatusPatch<'a> {
     pub tracker: &'a NodeCondTracker,
+    pub custom: &'a [CustomCondEntry],
     pub heartbeat_unix: u64,
 }
 
 impl NodeStatusPatch<'_> {
-    pub fn write_json(&self, out: &mut HString<1536>) -> Result<(), core::fmt::Error> {
+    pub fn write_json(&self, out: &mut HString<3072>) -> Result<(), core::fmt::Error> {
         let t = self.tracker;
         let mut hb: HString<40> = HString::new();
         fmt_rfc3339(self.heartbeat_unix, &mut hb)?;
@@ -152,7 +170,6 @@ impl NodeStatusPatch<'_> {
                 r#"{{"type":"MemoryPressure","status":"{mp}","reason":"{mpr}","message":"{mpm}","lastHeartbeatTime":"{hb}","lastTransitionTime":"{mt}"}},"#,
                 r#"{{"type":"DiskPressure","status":"{dp}","reason":"KubeletHasNoDiskPressure","message":"there is no disk","lastHeartbeatTime":"{hb}","lastTransitionTime":"{dt}"}},"#,
                 r#"{{"type":"PIDPressure","status":"{pp}","reason":"KubeletHasSufficientPID","message":"PIDs are also lies","lastHeartbeatTime":"{hb}","lastTransitionTime":"{pt}"}}"#,
-                r#"]}}}}"#,
             ),
             ready = if t.ready.value { "True" } else { "False" },
             mp = if t.memory_pressure.value {
@@ -177,7 +194,24 @@ impl NodeStatusPatch<'_> {
             mt = mp_t.as_str(),
             dt = dp_t.as_str(),
             pt = pp_t.as_str(),
-        )
+        )?;
+
+        for entry in self.custom {
+            let mut tt: HString<40> = HString::new();
+            fmt_rfc3339(entry.transitioned_at, &mut tt)?;
+            write!(
+                out,
+                r#",{{"type":"{name}","status":"{status}","reason":"{reason}","message":"{message}","lastHeartbeatTime":"{hb}","lastTransitionTime":"{tt}"}}"#,
+                name = entry.name,
+                status = entry.current.status.as_str(),
+                reason = entry.current.reason,
+                message = entry.current.message,
+                hb = hb.as_str(),
+                tt = tt.as_str(),
+            )?;
+        }
+
+        out.push_str("]}}").map_err(|_| core::fmt::Error)
     }
 }
 

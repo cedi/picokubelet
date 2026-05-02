@@ -9,12 +9,16 @@
 use core::fmt::Write as FmtWrite;
 use core::net::Ipv4Addr;
 
+use embassy_time::Instant;
 use heapless::String as HString;
 use log::{info, warn};
 
 use crate::config::{MEMORY_PRESSURE_FREE_BYTES, NODE_NAME};
-use crate::k8s::conditions::NodeCondTracker;
-use crate::k8s::models::{HeapAnnotationPatch, LeaseBody, NodeRegistration, NodeStatusPatch};
+use crate::k8s::conditions::{
+    CustomCondInputs, CustomCondTracker, NodeCondTracker, eval_caffeinated, eval_existential,
+    eval_haunted, eval_peckish, eval_vibes,
+};
+use crate::k8s::models::{CustomCondEntry, HeapAnnotationPatch, LeaseBody, NodeRegistration, NodeStatusPatch};
 use crate::net::client::SharedClient;
 use crate::wallclock::{parse_http_date, set_wall_clock, unix_now_secs};
 
@@ -51,13 +55,18 @@ impl NodeIdentity {
     }
 }
 
-pub async fn bootstrap(client: &SharedClient, identity: &NodeIdentity) -> NodeCondTracker {
+pub async fn bootstrap(
+    client: &SharedClient,
+    identity: &NodeIdentity,
+) -> (NodeCondTracker, CustomCondTracker) {
     anchor_clock(client).await;
     register_node(client, identity).await;
     create_lease(client).await;
-    let mut tracker = NodeCondTracker::new(unix_now_secs());
-    push_initial_status(client, identity, &mut tracker).await;
-    tracker
+    let now = unix_now_secs();
+    let mut tracker = NodeCondTracker::new(now);
+    let mut custom = CustomCondTracker::new(now);
+    push_initial_status(client, identity, &mut tracker, &mut custom).await;
+    (tracker, custom)
 }
 
 async fn anchor_clock(client: &SharedClient) {
@@ -153,6 +162,7 @@ async fn push_initial_status(
     client: &SharedClient,
     identity: &NodeIdentity,
     tracker: &mut NodeCondTracker,
+    custom: &mut CustomCondTracker,
 ) {
     let now = unix_now_secs();
     let free = esp_alloc::HEAP.free();
@@ -160,9 +170,60 @@ async fn push_initial_status(
         .memory_pressure
         .observe(free < MEMORY_PRESSURE_FREE_BYTES, now);
 
-    let mut body: HString<1536> = HString::new();
+    // First-shot: no prior wifi window, no prior renewals; we still want
+    // every condition stamped with a fresh transition time so kubectl
+    // doesn't show 0001-01-01.
+    let inputs = CustomCondInputs {
+        heap_free_bytes: free,
+        uptime_secs: Instant::now().as_secs(),
+        wifi_reconnects_5min: 0,
+        renewal_count: 0,
+        bssid_changed: false,
+        time_slipped: false,
+    };
+    let v = eval_vibes(&inputs);
+    let c = eval_caffeinated(&inputs);
+    let e = eval_existential(&inputs);
+    let p = eval_peckish(&inputs);
+    let h = eval_haunted(&inputs);
+    custom.vibes.observe(v.status, now);
+    custom.caffeinated.observe(c.status, now);
+    custom.existential.observe(e.status, now);
+    custom.peckish.observe(p.status, now);
+    custom.haunted.observe(h.status, now);
+
+    let entries = [
+        CustomCondEntry {
+            name: "Vibes",
+            current: v,
+            transitioned_at: custom.vibes.transitioned_at,
+        },
+        CustomCondEntry {
+            name: "Caffeinated",
+            current: c,
+            transitioned_at: custom.caffeinated.transitioned_at,
+        },
+        CustomCondEntry {
+            name: "Existential",
+            current: e,
+            transitioned_at: custom.existential.transitioned_at,
+        },
+        CustomCondEntry {
+            name: "Peckish",
+            current: p,
+            transitioned_at: custom.peckish.transitioned_at,
+        },
+        CustomCondEntry {
+            name: "Haunted",
+            current: h,
+            transitioned_at: custom.haunted.transitioned_at,
+        },
+    ];
+
+    let mut body: HString<3072> = HString::new();
     if (NodeStatusPatch {
         tracker,
+        custom: &entries,
         heartbeat_unix: now,
     })
     .write_json(&mut body)
