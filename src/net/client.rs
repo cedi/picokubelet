@@ -2,6 +2,8 @@ use core::fmt::Write as FmtWrite;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, Ipv4Address, Stack};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::Duration;
 use embedded_io_async::Write;
 use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
@@ -12,6 +14,11 @@ use rand_core::SeedableRng;
 
 use crate::config::{K3S_API_HOST, K3S_API_PORT_STR, K3S_TOKEN};
 use crate::net::http::{ApiError, Response, parse_response};
+
+/// One ApiClient shared across bootstrap and the reconcilers, behind an
+/// async mutex. Each request takes the lock for the round-trip and drops
+/// it before processing the response.
+pub type SharedClient = Mutex<CriticalSectionRawMutex, ApiClient<'static>>;
 
 /// Owns the TLS buffers and exposes typed HTTP methods for talking to k3s.
 pub struct ApiClient<'a> {
