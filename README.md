@@ -55,6 +55,20 @@ The kubelet loop is two coroutines. One issues a `PATCH` against this node's `Le
 
 The whole thing is built on `embassy` for async, `embassy-net` and `embassy-net-wiznet` for the network stack, and `esp-hal` for the chip.
 
+## Status LED
+
+The Waveshare board has a single onboard WS2812 on GPIO 21. Firmware drives it from a dedicated embassy task over RMT channel 0, so the LED keeps animating even when the kubelet is mid-TLS handshake. Brightness is capped at ~15%; full power is genuinely painful indoors.
+
+| Pattern | State |
+| --- | --- |
+| Red → green → blue → off, 200 ms each | Self-test at boot — confirms the LED is alive before anything else runs. |
+| Solid dim white | Booting. Set after self-test, before network init. |
+| Blue, ~1.5 Hz breathe | Connecting. Covers Wi-Fi association, DHCP, TLS handshake, node registration, and initial Lease creation. |
+| Green, ~1 Hz breathe | Healthy. Set after the *first* successful Lease renewal — Lease creation alone isn't enough. |
+| Yellow flash, 100 ms | Lease renewal heartbeat, every ~10 s, overlaid on the green breathe. |
+
+`Warning`, `Disconnected`, and `Panic` exist as enum variants but currently render to off. They're reserved for phases when error handling is built out enough to drive them honestly; an LED that lies under stress is worse than one that goes dark.
+
 ## Building and flashing
 
 You will need the Espressif Rust toolchain. The repo uses `mise` to pin everything (`espup`, `espflash`, the Xtensa-aware Rust toolchain) so you don't have to reason about it.

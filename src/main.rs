@@ -1,18 +1,27 @@
-//! picokubelet — phase 3: register as a Kubernetes Node and stay Ready.
+//! picokubelet — phase 4: register, stay Ready, and report honest health.
 //!
 //! After Wi-Fi + DHCP + TLS to k3s:
 //!  1. GET /version once to anchor a wall clock (parsed from the Date header
 //!     because we don't have an RTC).
 //!  2. POST /api/v1/nodes with our Node spec — lying about CPU/memory.
 //!  3. POST a Lease into kube-node-lease.
-//!  4. Loop forever PUTting the Lease every 10s with a fresh renewTime.
+//!  4. PATCH /nodes/{name}/status with fresh heartbeats + a heap-derived
+//!     MemoryPressure; PATCH /nodes/{name} with a free-heap annotation.
+//!  5. Loop forever: lease PATCH every 10s, status + annotation PATCH every
+//!     5 min (or whenever a condition flips).
 //!
-//! As long as the lease stays fresh, the Node Lifecycle Controller marks
-//! us Ready in `kubectl get nodes`. Cert verification is still off — fine
-//! for the home lab, will become a real CA + client cert in a later phase.
+//! The lease keeps the Node Lifecycle Controller off our back on a 40s
+//! cadence; the status PATCH keeps every condition's lastHeartbeatTime
+//! fresh so kube-state-metrics and other second-order observers see a
+//! healthy node, not a node whose conditions are all 0001-01-01.
+//!
+//! Cert verification is still off — fine for the home lab, will become a
+//! real CA + client cert in a later phase.
 
 #![no_std]
 #![no_main]
+
+mod led;
 
 use core::fmt::Write as FmtWrite;
 use core::net::Ipv4Addr;
@@ -68,6 +77,17 @@ const NODE_NAME: &str = match option_env!("NODE_NAME") {
 };
 const LEASE_DURATION_SECS: u32 = 40;
 const LEASE_RENEW_PERIOD_SECS: u64 = 10;
+
+// Status subresource updates are the *slow* heartbeat. Real kubelets default
+// to 5 min (or sooner on change). The lease covers the fast path; status
+// PATCHes refresh `lastHeartbeatTime` so observers like kube-state-metrics
+// see a healthy node.
+const STATUS_UPDATE_PERIOD_SECS: u64 = 300;
+
+// Real kubelet flips MemoryPressure=True at <100Mi free. Scaled to ESP heap:
+// True when free heap drops below this. With ~100KB total heap, 20KB is the
+// "you're about to OOM" line.
+const MEMORY_PRESSURE_FREE_BYTES: usize = 20 * 1024;
 
 // Required by espflash: embeds an app descriptor (version, name, build date).
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -170,10 +190,17 @@ async fn main(spawner: Spawner) -> ! {
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
+    // LED first, before logs and network. The self-test runs on its own
+    // and confirms the WS2812 hardware is alive even if everything else
+    // fails. The task defaults to Booting after self-test.
+    spawner.spawn(led::led_task(peripherals.RMT, peripherals.GPIO21).unwrap());
+
     info!("picokubelet booting on ESP32-S3");
     info!("identity: {}", NODE_NAME);
     info!("target k3s api server: {}:{}", K3S_API_HOST, K3S_API_PORT_STR);
     info!("joining SSID: {}", WIFI_SSID);
+
+    led::set(led::LedPattern::Connecting);
 
     let station_config = WifiConfig::Station(
         StationConfig::default()
@@ -254,7 +281,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // 2) POST /api/v1/nodes — register ourselves.
     let mut node_body: HString<2048> = HString::new();
-    build_node_body(&mut node_body, my_ip).expect("node body build");
+    build_node_body(&mut node_body, my_ip, unix_now_secs()).expect("node body build");
     info!("POST /api/v1/nodes (body: {} bytes)", node_body.len());
     match k8s_request(
         stack, api_smol, port, rng, tls_read, tls_write,
@@ -291,9 +318,11 @@ async fn main(spawner: Spawner) -> ! {
         Err(e) => warn!("lease POST failed: {:?}", e),
     }
 
-    // 4) Lease renewal loop. PUT every LEASE_RENEW_PERIOD_SECS with a fresh
-    //    renewTime. The Node Lifecycle Controller checks
-    //    `now - renewTime < leaseDurationSeconds` to mark us Ready.
+    // 4) Initial status PATCH so every condition has a fresh
+    //    lastHeartbeatTime out of the gate. Without this, observers that
+    //    look past `Ready` (kube-state-metrics, well-written admission
+    //    controllers) see conditions stamped 0001-01-01 and treat the node
+    //    as half-broken even when the lease is current.
     let lease_path: HString<128> = {
         let mut s: HString<128> = HString::new();
         write!(
@@ -303,7 +332,32 @@ async fn main(spawner: Spawner) -> ! {
         ).unwrap();
         s
     };
-    info!("entering lease renewal loop ({}s cadence)", LEASE_RENEW_PERIOD_SECS);
+    let status_path: HString<128> = {
+        let mut s: HString<128> = HString::new();
+        write!(&mut s, "/api/v1/nodes/{}/status", NODE_NAME).unwrap();
+        s
+    };
+    let node_path: HString<128> = {
+        let mut s: HString<128> = HString::new();
+        write!(&mut s, "/api/v1/nodes/{}", NODE_NAME).unwrap();
+        s
+    };
+
+    let mut tracker = NodeCondTracker::new(unix_now_secs());
+    push_status(
+        stack, api_smol, port, rng, tls_read, tls_write,
+        &status_path, &node_path, &mut tracker, resp_buf,
+    ).await;
+    let mut last_status_update = unix_now_secs();
+
+    // 5) Lease renewal loop. PATCH every LEASE_RENEW_PERIOD_SECS with a
+    //    fresh renewTime; PATCH the status subresource on the slower
+    //    STATUS_UPDATE_PERIOD_SECS cadence (or whenever a condition flips).
+    info!(
+        "entering renewal loop (lease {}s, status {}s)",
+        LEASE_RENEW_PERIOD_SECS, STATUS_UPDATE_PERIOD_SECS,
+    );
+    let mut healthy = false;
     loop {
         Timer::after(Duration::from_secs(LEASE_RENEW_PERIOD_SECS)).await;
 
@@ -318,7 +372,15 @@ async fn main(spawner: Spawner) -> ! {
             "PATCH", &lease_path, Some(body.as_bytes()), resp_buf,
         ).await {
             Ok(resp) => match resp.status {
-                200 => info!("lease renewed"),
+                200 => {
+                    info!("lease renewed");
+                    if !healthy {
+                        led::set(led::LedPattern::Healthy);
+                        healthy = true;
+                    } else {
+                        led::set(led::LedPattern::Activity);
+                    }
+                }
                 404 => {
                     warn!("lease vanished, recreating");
                     let _ = k8s_request(
@@ -332,13 +394,94 @@ async fn main(spawner: Spawner) -> ! {
             },
             Err(e) => warn!("lease renewal failed: {:?}", e),
         }
+
+        // Status patch — slow cadence, or immediately on a condition flip.
+        let now = unix_now_secs();
+        let free = esp_alloc::HEAP.free();
+        let mp_now = free < MEMORY_PRESSURE_FREE_BYTES;
+        let flipped = tracker.memory_pressure.observe(mp_now, now);
+        let due = now != 0
+            && now.saturating_sub(last_status_update) >= STATUS_UPDATE_PERIOD_SECS;
+        if flipped || due {
+            push_status(
+                stack, api_smol, port, rng, tls_read, tls_write,
+                &status_path, &node_path, &mut tracker, resp_buf,
+            ).await;
+            last_status_update = now;
+        }
+    }
+}
+
+/// Send the two status-side PATCHes: conditions on /status (strategic
+/// merge), heap-free annotation on the main resource (regular merge —
+/// the /status subresource silently drops metadata).
+#[allow(clippy::too_many_arguments)]
+async fn push_status(
+    stack: Stack<'static>,
+    api_ip: Ipv4Address,
+    api_port: u16,
+    rng: Rng,
+    tls_read: &mut [u8],
+    tls_write: &mut [u8],
+    status_path: &str,
+    node_path: &str,
+    tracker: &mut NodeCondTracker,
+    resp_buf: &mut [u8],
+) {
+    let now = unix_now_secs();
+    let free = esp_alloc::HEAP.free();
+    tracker.memory_pressure.observe(free < MEMORY_PRESSURE_FREE_BYTES, now);
+
+    let mut body: HString<1536> = HString::new();
+    if build_status_body(&mut body, tracker, now).is_err() {
+        warn!("status body build failed");
+        return;
+    }
+    info!(
+        "PATCH {} (free heap {} B, MemoryPressure={})",
+        status_path, free, tracker.memory_pressure.value,
+    );
+    match k8s_request(
+        stack, api_ip, api_port, rng, tls_read, tls_write,
+        "PATCH-STRATEGIC", status_path, Some(body.as_bytes()), resp_buf,
+    ).await {
+        Ok(resp) => match resp.status {
+            200 => info!("status updated"),
+            other => warn!(
+                "status PATCH returned {}: {}",
+                other,
+                core::str::from_utf8(resp.body).unwrap_or("<non-utf8>"),
+            ),
+        },
+        Err(e) => warn!("status PATCH failed: {:?}", e),
+    }
+
+    let mut ann: HString<256> = HString::new();
+    if build_annotation_body(&mut ann, free).is_err() {
+        return;
+    }
+    match k8s_request(
+        stack, api_ip, api_port, rng, tls_read, tls_write,
+        "PATCH", node_path, Some(ann.as_bytes()), resp_buf,
+    ).await {
+        Ok(resp) if resp.status == 200 => {}
+        Ok(resp) => warn!("annotation PATCH returned {}", resp.status),
+        Err(e) => warn!("annotation PATCH failed: {:?}", e),
     }
 }
 
 // ---- JSON body builders --------------------------------------------------
 
-fn build_node_body(out: &mut HString<2048>, ip: Ipv4Addr) -> Result<(), core::fmt::Error> {
+fn build_node_body(
+    out: &mut HString<2048>,
+    ip: Ipv4Addr,
+    now_unix: u64,
+) -> Result<(), core::fmt::Error> {
     let o = ip.octets();
+    // Stamp every condition with the current time so the controller doesn't
+    // immediately mark us Unknown if the status PATCH is slow to land.
+    let mut ts: HString<40> = HString::new();
+    fmt_rfc3339(now_unix, &mut ts)?;
     write!(
         out,
         concat!(
@@ -374,13 +517,13 @@ fn build_node_body(out: &mut HString<2048>, ip: Ipv4Addr) -> Result<(), core::fm
                 r#""addresses":[{{"type":"InternalIP","address":"{a}.{b}.{c}.{d}"}},{{"type":"Hostname","address":"{name}"}}],"#,
                 r#""daemonEndpoints":{{"kubeletEndpoint":{{"Port":10250}}}},"#,
                 r#""conditions":[{{"#,
-                    r#""type":"Ready","status":"True","reason":"KubeletReady","message":"ESP32-S3 sips electrons but is here""#,
+                    r#""type":"Ready","status":"True","reason":"KubeletReady","message":"ESP32-S3 sips electrons but is here","lastHeartbeatTime":"{ts}","lastTransitionTime":"{ts}""#,
                 r#"}},{{"#,
-                    r#""type":"MemoryPressure","status":"False","reason":"KubeletHasSufficientMemory","message":"More than zero bytes free""#,
+                    r#""type":"MemoryPressure","status":"False","reason":"KubeletHasSufficientMemory","message":"more than zero bytes free","lastHeartbeatTime":"{ts}","lastTransitionTime":"{ts}""#,
                 r#"}},{{"#,
-                    r#""type":"DiskPressure","status":"False","reason":"KubeletHasNoDiskPressure","message":"There is no disk""#,
+                    r#""type":"DiskPressure","status":"False","reason":"KubeletHasNoDiskPressure","message":"there is no disk","lastHeartbeatTime":"{ts}","lastTransitionTime":"{ts}""#,
                 r#"}},{{"#,
-                    r#""type":"PIDPressure","status":"False","reason":"KubeletHasSufficientPID","message":"PIDs are also lies""#,
+                    r#""type":"PIDPressure","status":"False","reason":"KubeletHasSufficientPID","message":"PIDs are also lies","lastHeartbeatTime":"{ts}","lastTransitionTime":"{ts}""#,
                 r#"}}]"#,
             r#"}}"#,
             r#"}}"#,
@@ -388,6 +531,7 @@ fn build_node_body(out: &mut HString<2048>, ip: Ipv4Addr) -> Result<(), core::fm
         name = NODE_NAME,
         a = o[0], b = o[1], c = o[2], d = o[3],
         mac = ((o[0] as u64) << 24) | ((o[1] as u64) << 16) | ((o[2] as u64) << 8) | (o[3] as u64),
+        ts = ts.as_str(),
     )
 }
 
@@ -408,6 +552,116 @@ fn build_lease_body(out: &mut HString<512>, renew_unix: u64) -> Result<(), core:
         name = NODE_NAME,
         ldur = LEASE_DURATION_SECS,
         renew = renew.as_str(),
+    )
+}
+
+// ---- node condition tracking --------------------------------------------
+//
+// `lastHeartbeatTime` advances every status PATCH; `lastTransitionTime`
+// only advances when a condition's status field actually flips. Conflating
+// the two is a real-kubelet anti-pattern that makes nodes look flappy in
+// monitoring, so we track the "last flipped" time per-condition.
+
+#[derive(Clone, Copy)]
+struct CondState {
+    /// Semantic value: for Ready, True means ready; for the *Pressure
+    /// conditions, True means the node is under pressure.
+    value: bool,
+    transitioned_at: u64,
+}
+
+impl CondState {
+    fn new(initial: bool, now: u64) -> Self {
+        Self { value: initial, transitioned_at: now }
+    }
+
+    fn observe(&mut self, current: bool, now: u64) -> bool {
+        let flipped = current != self.value;
+        if flipped {
+            self.value = current;
+            self.transitioned_at = now;
+        }
+        flipped
+    }
+}
+
+struct NodeCondTracker {
+    ready: CondState,
+    memory_pressure: CondState,
+    disk_pressure: CondState,
+    pid_pressure: CondState,
+}
+
+impl NodeCondTracker {
+    fn new(now: u64) -> Self {
+        Self {
+            ready: CondState::new(true, now),
+            memory_pressure: CondState::new(false, now),
+            disk_pressure: CondState::new(false, now),
+            pid_pressure: CondState::new(false, now),
+        }
+    }
+}
+
+fn build_status_body(
+    out: &mut HString<1536>,
+    t: &NodeCondTracker,
+    heartbeat_unix: u64,
+) -> Result<(), core::fmt::Error> {
+    let mut hb: HString<40> = HString::new();
+    fmt_rfc3339(heartbeat_unix, &mut hb)?;
+    let mut ready_t: HString<40> = HString::new();
+    fmt_rfc3339(t.ready.transitioned_at, &mut ready_t)?;
+    let mut mp_t: HString<40> = HString::new();
+    fmt_rfc3339(t.memory_pressure.transitioned_at, &mut mp_t)?;
+    let mut dp_t: HString<40> = HString::new();
+    fmt_rfc3339(t.disk_pressure.transitioned_at, &mut dp_t)?;
+    let mut pp_t: HString<40> = HString::new();
+    fmt_rfc3339(t.pid_pressure.transitioned_at, &mut pp_t)?;
+
+    let mp_reason = if t.memory_pressure.value {
+        "KubeletHasInsufficientMemory"
+    } else {
+        "KubeletHasSufficientMemory"
+    };
+    let mp_msg = if t.memory_pressure.value {
+        "free heap below threshold"
+    } else {
+        "more than zero bytes free"
+    };
+
+    write!(
+        out,
+        concat!(
+            r#"{{"status":{{"conditions":["#,
+            r#"{{"type":"Ready","status":"{ready}","reason":"KubeletReady","message":"ESP32-S3 sips electrons but is here","lastHeartbeatTime":"{hb}","lastTransitionTime":"{rt}"}},"#,
+            r#"{{"type":"MemoryPressure","status":"{mp}","reason":"{mpr}","message":"{mpm}","lastHeartbeatTime":"{hb}","lastTransitionTime":"{mt}"}},"#,
+            r#"{{"type":"DiskPressure","status":"{dp}","reason":"KubeletHasNoDiskPressure","message":"there is no disk","lastHeartbeatTime":"{hb}","lastTransitionTime":"{dt}"}},"#,
+            r#"{{"type":"PIDPressure","status":"{pp}","reason":"KubeletHasSufficientPID","message":"PIDs are also lies","lastHeartbeatTime":"{hb}","lastTransitionTime":"{pt}"}}"#,
+            r#"]}}}}"#,
+        ),
+        ready = if t.ready.value { "True" } else { "False" },
+        mp = if t.memory_pressure.value { "True" } else { "False" },
+        dp = if t.disk_pressure.value { "True" } else { "False" },
+        pp = if t.pid_pressure.value { "True" } else { "False" },
+        mpr = mp_reason,
+        mpm = mp_msg,
+        hb = hb.as_str(),
+        rt = ready_t.as_str(),
+        mt = mp_t.as_str(),
+        dt = dp_t.as_str(),
+        pt = pp_t.as_str(),
+    )
+}
+
+fn build_annotation_body(
+    out: &mut HString<256>,
+    free_bytes: usize,
+) -> Result<(), core::fmt::Error> {
+    write!(
+        out,
+        r#"{{"metadata":{{"annotations":{{"node.specht.dev/heap-bytes-free":"{}"}}}}}}"#,
+        free_bytes,
     )
 }
 
@@ -487,13 +741,14 @@ async fn k8s_request<'a>(
     // Build the request line + headers. Sized for a ~1KB SA-token JWT plus
     // the long-ish lease PATCH path; bumping further is cheap.
     //
-    // PATCH uses RFC 7396 merge-patch so we don't need to thread
-    // resourceVersion through every request — k3s overlays our partial
-    // object onto whatever's there. Other methods get plain JSON.
-    let content_type = if method == "PATCH" {
-        "application/merge-patch+json"
-    } else {
-        "application/json"
+    // PATCH defaults to RFC 7396 merge-patch; "PATCH-STRATEGIC" picks
+    // application/strategic-merge-patch+json, which is what the kubelet
+    // status subresource wants so it knows to merge the conditions array
+    // by `type` instead of replacing it wholesale.
+    let (http_method, content_type) = match method {
+        "PATCH" => ("PATCH", "application/merge-patch+json"),
+        "PATCH-STRATEGIC" => ("PATCH", "application/strategic-merge-patch+json"),
+        m => (m, "application/json"),
     };
     let mut head: HString<2048> = HString::new();
     let body_len = body.map(|b| b.len()).unwrap_or(0);
@@ -508,7 +763,7 @@ async fn k8s_request<'a>(
          Content-Length: {clen}\r\n\
          Connection: close\r\n\
          \r\n",
-        method = method,
+        method = http_method,
         path = path,
         host = K3S_API_HOST,
         port = K3S_API_PORT_STR,
