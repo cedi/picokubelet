@@ -1,6 +1,16 @@
 # picokubelet
 
-<!-- TODO: insert kubectl get nodes screenshot showing the ESP32 in the list -->
+```bash
+$ kubectl get nodes -owide
+NAME                   STATUS   ROLES                  AGE     VERSION               INTERNAL-IP     EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION         CONTAINER-RUNTIME
+clusterpi-leader       Ready    control-plane,master   546d    v1.31.1+k3s1          192.168.0.103   <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-2712   containerd://1.7.21-k3s2
+clusterpi-worker1      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.188   <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-v8     containerd://1.7.21-k3s2
+clusterpi-worker2      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.92    <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-v8     containerd://1.7.21-k3s2
+clusterpi-worker3      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.190   <none>        Debian GNU/Linux 12 (bookworm)   6.6.74+rpt-rpi-v8      containerd://1.7.21-k3s2
+esp-node-01-guenther   Ready    <none>                 4m53s   v1.31.1-picokubelet   192.168.0.111   <none>        picokubelet on bare metal        esp-rs-no_std          lies://0.1.0
+```
+
+[![asciicast](https://asciinema.org/a/1004944.svg)](https://asciinema.org/a/1004944)
 
 ## What this is
 
