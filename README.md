@@ -1,3 +1,6 @@
+[![PR](https://github.com/cedi/picokubelet/actions/workflows/pr.yml/badge.svg)](https://github.com/cedi/picokubelet/actions/workflows/pr.yml)
+[![Release](https://github.com/cedi/picokubelet/actions/workflows/release.yml/badge.svg)](https://github.com/cedi/picokubelet/actions/workflows/release.yml)
+
 # picokubelet
 
 ```bash
@@ -90,13 +93,13 @@ This is shaped like a real kubelet's syncloop, smaller.
 
 The Waveshare board has a single onboard WS2812 on GPIO 21. Firmware drives it from a dedicated embassy task over RMT channel 0, so the LED keeps animating even when the kubelet is mid-TLS handshake. Brightness is capped at ~15%; full power is genuinely painful indoors.
 
-| Pattern | State |
-| --- | --- |
-| Red → green → blue → off, 200 ms each | Self-test at boot; confirms the LED is alive before anything else runs. |
-| Solid dim white | Booting. Set after self-test, before network init. |
-| Blue, ~1.5 Hz breathe | Connecting. Covers Wi-Fi association, DHCP, TLS handshake, node registration, and initial Lease creation. |
-| Green, ~0.33 Hz breathe | Healthy. Set after the *first* successful Lease renewal; Lease creation alone isn't enough. |
-| Yellow flash, 100 ms | Lease renewal heartbeat, every ~10 s, overlaid on the green breathe. |
+| Pattern                               | State                                                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Red → green → blue → off, 200 ms each | Self-test at boot; confirms the LED is alive before anything else runs.                                   |
+| Solid dim white                       | Booting. Set after self-test, before network init.                                                        |
+| Blue, ~1.5 Hz breathe                 | Connecting. Covers Wi-Fi association, DHCP, TLS handshake, node registration, and initial Lease creation. |
+| Green, ~0.33 Hz breathe               | Healthy. Set after the _first_ successful Lease renewal; Lease creation alone isn't enough.               |
+| Yellow flash, 100 ms                  | Lease renewal heartbeat, every ~10 s, overlaid on the green breathe.                                      |
 
 `Warning`, `Disconnected`, and `Panic` exist as enum variants but currently render to off. They're reserved for phases when error handling is built out enough to drive them honestly; an LED that lies under stress is worse than one that goes dark.
 
