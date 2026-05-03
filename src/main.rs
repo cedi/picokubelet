@@ -30,14 +30,22 @@ mod wallclock;
 
 use core::net::Ipv4Addr;
 
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_net::{Config as NetConfig, Ipv4Address, StackResources};
-use embassy_sync::mutex::Mutex;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
-    clock::CpuClock, interrupt::software::SoftwareInterruptControl, ram, rng::Rng,
+    clock::CpuClock,
+    efuse::{self, InterfaceMacAddress},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig},
+    interrupt::software::SoftwareInterruptControl,
+    ram,
+    rng::Rng,
+    spi::master::{Config as SpiConfig, Spi},
+    time::Rate,
     timer::timg::TimerGroup,
 };
 use esp_radio::wifi::{Config as WifiConfig, ControllerConfig, sta::StationConfig};
@@ -50,7 +58,7 @@ use crate::config::{
 };
 use crate::kubelet::NodeIdentity;
 use crate::net::client::{ApiClient, SharedClient};
-use crate::net::wifi::{connection_task, net_task};
+use crate::net::wifi::connection_task;
 
 // Required by espflash: embeds an app descriptor (version, name, build date).
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -78,20 +86,7 @@ async fn main(spawner: Spawner) -> ! {
         "target k3s api server: {}:{} (the control plane, allegedly)",
         K3S_API_HOST, K3S_API_PORT_STR
     );
-    info!("joining SSID: {} (please be there)", WIFI_SSID);
-
     led::set(led::LedPattern::Connecting);
-
-    let station_config = WifiConfig::Station(
-        StationConfig::default()
-            .with_ssid(WIFI_SSID)
-            .with_password(WIFI_PSK.into()),
-    );
-    let (controller, interfaces) = esp_radio::wifi::new(
-        peripherals.WIFI,
-        ControllerConfig::default().with_initial_config(station_config),
-    )
-    .expect("esp_radio::wifi::new failed");
 
     let net_config = NetConfig::dhcpv4(Default::default());
     static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
@@ -100,10 +95,74 @@ async fn main(spawner: Spawner) -> ! {
     let rng = Rng::new();
     let seed = ((rng.random() as u64) << 32) | rng.random() as u64;
 
-    let (stack, net_runner) = embassy_net::new(interfaces.station, net_config, net_resources, seed);
+    info!("asking ethernet if it wants to be the adult in the room");
+    let spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default().with_frequency(Rate::from_mhz(25)),
+    )
+    .expect("W5500 SPI init failed")
+    .with_sck(peripherals.GPIO13)
+    .with_mosi(peripherals.GPIO11)
+    .with_miso(peripherals.GPIO12)
+    .into_async();
 
-    spawner.spawn(connection_task(controller).unwrap());
-    spawner.spawn(net_task(net_runner).unwrap());
+    static ETH_SPI_BUS: StaticCell<
+        Mutex<CriticalSectionRawMutex, crate::net::ethernet::EthSpiBus>,
+    > = StaticCell::new();
+    let eth_spi_bus = ETH_SPI_BUS.init(Mutex::new(spi));
+    let eth_cs = Output::new(peripherals.GPIO14, Level::High, OutputConfig::default());
+    let mut eth_spi_dev = SpiDevice::new(eth_spi_bus, eth_cs);
+
+    let stack = if crate::net::ethernet::probe_w5500(&mut eth_spi_dev).await {
+        info!("ethernet wins; Wi-Fi stays in bed, fully disconnected");
+
+        let eth_mac = efuse::interface_mac_address(InterfaceMacAddress::AccessPoint);
+        let mut mac_addr = [0u8; 6];
+        mac_addr.copy_from_slice(eth_mac.as_bytes());
+
+        static WIZNET_STATE: StaticCell<embassy_net_wiznet::State<2, 2>> = StaticCell::new();
+        let wiznet_state = WIZNET_STATE.init(embassy_net_wiznet::State::<2, 2>::new());
+
+        let eth_int = Input::new(peripherals.GPIO10, InputConfig::default());
+        let eth_reset = Output::new(peripherals.GPIO9, Level::High, OutputConfig::default());
+        let (eth_device, eth_runner) = embassy_net_wiznet::new::<
+            2,
+            2,
+            embassy_net_wiznet::chip::W5500,
+            _,
+            _,
+            _,
+        >(mac_addr, wiznet_state, eth_spi_dev, eth_int, eth_reset)
+        .await
+        .expect("W5500 init failed after successful probe");
+
+        let (stack, net_runner) = embassy_net::new(eth_device, net_config, net_resources, seed);
+        spawner
+            .spawn(crate::net::ethernet::ethernet_task(eth_runner).unwrap());
+        spawner.spawn(crate::net::ethernet::net_task(net_runner).unwrap());
+        stack
+    } else {
+        info!("ethernet declined the quest; falling back to Wi-Fi");
+        info!("joining SSID: {} (please be there)", WIFI_SSID);
+
+        let station_config = WifiConfig::Station(
+            StationConfig::default()
+                .with_ssid(WIFI_SSID)
+                .with_password(WIFI_PSK.into()),
+        );
+        let (controller, interfaces) = esp_radio::wifi::new(
+            peripherals.WIFI,
+            ControllerConfig::default().with_initial_config(station_config),
+        )
+        .expect("esp_radio::wifi::new failed");
+
+        let (stack, net_runner) =
+            embassy_net::new(interfaces.station, net_config, net_resources, seed);
+
+        spawner.spawn(connection_task(controller).unwrap());
+        spawner.spawn(crate::net::wifi::net_task(net_runner).unwrap());
+        stack
+    };
 
     info!("waiting for DHCP lease (the original lease)...");
     stack.wait_config_up().await;
