@@ -1,0 +1,72 @@
+name: PR
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ESPFLASH_SKIP_UPDATE_CHECK: "1"
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  K3S_API_HOST: 127.0.0.1
+  K3S_API_PORT: "6443"
+  K3S_TOKEN: ci-token
+  WIFI_SSID: ci-ssid
+  WIFI_PSK: ci-password
+
+jobs:
+  test:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache project toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-home
+            .rustup-home
+            target
+          key: ${{ runner.os }}-host-${{ hashFiles('.mise.toml', 'Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-host-
+
+      - name: Run host unit tests
+        run: mise run ci-host-test
+
+  firmware-check:
+    name: Firmware check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache project toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-home
+            .rustup-home
+            target
+          key: ${{ runner.os }}-firmware-${{ hashFiles('.mise.toml', 'Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-firmware-
+
+      - name: Check firmware
+        run: mise run check

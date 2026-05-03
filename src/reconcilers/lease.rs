@@ -4,16 +4,15 @@
 
 use core::sync::atomic::Ordering;
 
-use embassy_time::{Duration, Timer};
-use heapless::String as HString;
 use log::{info, warn};
 use portable_atomic::AtomicU32;
 
-use crate::config::{LEASE_RENEW_PERIOD_SECS, NODE_NAME};
-use crate::k8s::models::LeaseBody;
+use crate::config::NODE_NAME;
+use crate::k8s::api::{LeaseRenewal, ReconcileError};
 use crate::kubelet::NodeIdentity;
 use crate::led;
 use crate::net::client::SharedClient;
+use crate::reconcilers::{ReconcileContext, Reconciler};
 use crate::wallclock::unix_now_secs;
 
 /// Lifetime count of successful lease renewals (HTTP 200). Mirrors the
@@ -37,11 +36,17 @@ const FLAVOR_EVERY_N: u32 = 10;
 /// hardcoded in the logs.
 enum MilestoneLine {
     Plain(&'static str),
-    Named { prefix: &'static str, suffix: &'static str },
+    Named {
+        prefix: &'static str,
+        suffix: &'static str,
+    },
 }
 
 static MILESTONES: &[(u32, MilestoneLine)] = &[
-    (50, MilestoneLine::Plain("halfway to nine hundred and fifty")),
+    (
+        50,
+        MilestoneLine::Plain("halfway to nine hundred and fifty"),
+    ),
     (
         100,
         MilestoneLine::Plain("we have served the cluster for one thousand seconds"),
@@ -96,74 +101,64 @@ static FLAVOR_LINES: &[&str] = &[
     "kubelet (allegedly).",
 ];
 
-#[embassy_executor::task]
-pub async fn lease_reconciler(client: &'static SharedClient, identity: NodeIdentity) -> ! {
-    let mut healthy = false;
-    let mut renewal_count: u32 = 0;
-    loop {
-        Timer::after(Duration::from_secs(LEASE_RENEW_PERIOD_SECS)).await;
+pub struct LeaseReconciler {
+    healthy: bool,
+    renewal_count: u32,
+}
 
-        let mut body: HString<512> = HString::new();
-        if (LeaseBody {
-            renew_unix: unix_now_secs(),
-        })
-        .write_json(&mut body)
-        .is_err()
-        {
-            warn!("lease body build failed (clock not anchored?)");
-            continue;
+impl LeaseReconciler {
+    pub const fn new() -> Self {
+        Self {
+            healthy: false,
+            renewal_count: 0,
         }
+    }
+}
 
-        let renew_status = {
-            let mut c = client.lock().await;
-            match c.patch_merge(&identity.lease_path, body.as_bytes()).await {
-                Ok(resp) => Some(resp.status),
-                Err(e) => {
-                    warn!("lease renewal failed: {:?}", e);
-                    None
-                }
-            }
-        };
+impl Reconciler for LeaseReconciler {
+    const NAME: &'static str = "lease";
 
-        match renew_status {
-            Some(200) => {
-                renewal_count = renewal_count.wrapping_add(1);
-                RENEWAL_COUNT.store(renewal_count, Ordering::Release);
-                if let Some(line) = milestone_for(renewal_count) {
+    async fn reconcile(&mut self, ctx: &mut ReconcileContext) -> Result<(), ReconcileError> {
+        match ctx.api.renew_lease(&ctx.identity, unix_now_secs()).await? {
+            LeaseRenewal::Renewed => {
+                self.renewal_count = self.renewal_count.wrapping_add(1);
+                RENEWAL_COUNT.store(self.renewal_count, Ordering::Release);
+                if let Some(line) = milestone_for(self.renewal_count) {
                     match line {
                         MilestoneLine::Plain(s) => {
-                            info!("lease renewed (#{}, {})", renewal_count, s)
+                            info!("lease renewed (#{}, {})", self.renewal_count, s)
                         }
                         MilestoneLine::Named { prefix, suffix } => info!(
                             "lease renewed (#{}, {}{}{})",
-                            renewal_count, prefix, NODE_NAME, suffix
+                            self.renewal_count, prefix, NODE_NAME, suffix
                         ),
                     }
-                } else if renewal_count % FLAVOR_EVERY_N == 0 {
-                    let idx = (renewal_count / FLAVOR_EVERY_N) as usize % FLAVOR_LINES.len();
-                    info!("lease renewed (#{}, {})", renewal_count, FLAVOR_LINES[idx]);
+                } else if self.renewal_count % FLAVOR_EVERY_N == 0 {
+                    let idx = (self.renewal_count / FLAVOR_EVERY_N) as usize % FLAVOR_LINES.len();
+                    info!(
+                        "lease renewed (#{}, {})",
+                        self.renewal_count, FLAVOR_LINES[idx]
+                    );
                 } else {
-                    info!("lease renewed (#{})", renewal_count);
+                    info!("lease renewed (#{})", self.renewal_count);
                 }
-                if !healthy {
+                if !self.healthy {
                     led::set(led::LedPattern::Healthy);
-                    healthy = true;
+                    self.healthy = true;
                 } else {
                     led::set(led::LedPattern::Activity);
                 }
             }
-            Some(404) => {
+            LeaseRenewal::Missing => {
                 warn!("lease vanished, recreating (someone deleted my contract)");
-                let mut c = client.lock().await;
-                let _ = c
-                    .post(
-                        "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases",
-                        body.as_bytes(),
-                    )
-                    .await;
+                ctx.api.create_lease(unix_now_secs()).await?;
             }
-            Some(other) => warn!("lease renewal returned {}", other),
-            None => {}
         }
+        Ok(())
     }
+}
+
+#[embassy_executor::task]
+pub async fn lease_reconciler(client: &'static SharedClient, identity: NodeIdentity) -> ! {
+    LeaseReconciler::new().run(client, identity).await
 }
