@@ -1,13 +1,14 @@
+[![PR](https://github.com/cedi/picokubelet/actions/workflows/pr.yml/badge.svg)](https://github.com/cedi/picokubelet/actions/workflows/pr.yml)
+[![Release](https://github.com/cedi/picokubelet/actions/workflows/release.yml/badge.svg)](https://github.com/cedi/picokubelet/actions/workflows/release.yml)
+
 # picokubelet
 
 ```bash
 $ kubectl get nodes -owide
-NAME                   STATUS   ROLES                  AGE     VERSION               INTERNAL-IP     EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION         CONTAINER-RUNTIME
-clusterpi-leader       Ready    control-plane,master   546d    v1.31.1+k3s1          192.168.0.103   <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-2712   containerd://1.7.21-k3s2
-clusterpi-worker1      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.188   <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-v8     containerd://1.7.21-k3s2
-clusterpi-worker2      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.92    <none>        Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-v8     containerd://1.7.21-k3s2
-clusterpi-worker3      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.190   <none>        Debian GNU/Linux 12 (bookworm)   6.6.74+rpt-rpi-v8      containerd://1.7.21-k3s2
-esp-node-01-guenther   Ready    <none>                 4m53s   v1.31.1-picokubelet   192.168.0.111   <none>        picokubelet on bare metal        esp-rs-no_std          lies://0.1.0
+NAME                   STATUS   ROLES                  AGE     VERSION               INTERNAL-IP     OS-IMAGE                         KERNEL-VERSION         CONTAINER-RUNTIME
+k3s-server             Ready    control-plane,master   546d    v1.31.1+k3s1          192.168.0.103   Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-2712   containerd://1.7.21-k3s2
+clusterpi-worker1      Ready    <none>                 546d    v1.31.1+k3s1          192.168.0.188   Debian GNU/Linux 12 (bookworm)   6.12.34+rpt-rpi-v8     containerd://1.7.21-k3s2
+esp-node-01-guenther   Ready    <none>                 4m53s   v1.31.1-picokubelet   192.168.0.111   picokubelet on bare metal        esp-rs-no_std          lies://0.1.0
 ```
 
 [![asciicast](https://asciinema.org/a/1004944.svg)](https://asciinema.org/a/1004944)
@@ -90,13 +91,13 @@ This is shaped like a real kubelet's syncloop, smaller.
 
 The Waveshare board has a single onboard WS2812 on GPIO 21. Firmware drives it from a dedicated embassy task over RMT channel 0, so the LED keeps animating even when the kubelet is mid-TLS handshake. Brightness is capped at ~15%; full power is genuinely painful indoors.
 
-| Pattern | State |
-| --- | --- |
-| Red → green → blue → off, 200 ms each | Self-test at boot; confirms the LED is alive before anything else runs. |
-| Solid dim white | Booting. Set after self-test, before network init. |
-| Blue, ~1.5 Hz breathe | Connecting. Covers Wi-Fi association, DHCP, TLS handshake, node registration, and initial Lease creation. |
-| Green, ~0.33 Hz breathe | Healthy. Set after the *first* successful Lease renewal; Lease creation alone isn't enough. |
-| Yellow flash, 100 ms | Lease renewal heartbeat, every ~10 s, overlaid on the green breathe. |
+| Pattern                               | State                                                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Red → green → blue → off, 200 ms each | Self-test at boot; confirms the LED is alive before anything else runs.                                   |
+| Solid dim white                       | Booting. Set after self-test, before network init.                                                        |
+| Blue, ~1.5 Hz breathe                 | Connecting. Covers Wi-Fi association, DHCP, TLS handshake, node registration, and initial Lease creation. |
+| Green, ~0.33 Hz breathe               | Healthy. Set after the _first_ successful Lease renewal; Lease creation alone isn't enough.               |
+| Yellow flash, 100 ms                  | Lease renewal heartbeat, every ~10 s, overlaid on the green breathe.                                      |
 
 `Warning`, `Disconnected`, and `Panic` exist as enum variants but currently render to off. They're reserved for phases when error handling is built out enough to drive them honestly; an LED that lies under stress is worse than one that goes dark.
 
