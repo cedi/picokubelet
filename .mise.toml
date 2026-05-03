@@ -38,8 +38,12 @@ _.file = ".env"
 [tasks.bootstrap]
 description = "Install the esp-rs Xtensa toolchain into the project-local rustup home"
 run = """
-set -euo pipefail
+set -eu
 mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
+if [ -x "$RUSTUP_HOME/toolchains/esp/bin/rustc" ] && [ -d "$LIBCLANG_PATH" ]; then
+  echo "ESP toolchain already installed in $RUSTUP_HOME."
+  exit 0
+fi
 espup install \\
   --targets esp32s3 \\
   --export-file "{{ config_root }}/.export-esp.sh"
@@ -49,10 +53,12 @@ echo "Toolchain installed. The 'esp' channel is now resolvable inside this repo.
 [tasks.build]
 description = "Compile firmware for ESP32-S3 (release)"
 run = "cargo build --release"
+depends = ["bootstrap"]
 
 [tasks.build-debug]
 description = "Compile firmware for ESP32-S3 (dev profile, faster builds)"
 run = "cargo build"
+depends = ["bootstrap"]
 
 [tasks.flash]
 description = "Flash the latest release build to the ESP — no monitor"
@@ -74,6 +80,17 @@ run = "espflash erase-flash"
 [tasks.check]
 description = "Type-check without producing a binary (fast feedback)"
 run = "cargo check --release"
+depends = ["bootstrap"]
+
+[tasks.host-test]
+description = "Run host unit tests on macOS"
+run = "cargo host-test"
+depends = ["bootstrap"]
+
+[tasks.ci-host-test]
+description = "Run host unit tests on the GitHub Actions Linux runner"
+run = "cargo ci-host-test"
+depends = ["bootstrap"]
 
 [tasks.fmt]
 description = "Format Rust sources"
@@ -90,3 +107,24 @@ run = "cargo clean"
 [tasks.board-info]
 description = "Print the connected ESP's chip info, MAC, flash size"
 run = "espflash board-info"
+
+[tasks.package-release]
+description = "Build release firmware and package ELF, merged BIN, and checksums into dist/"
+depends = ["build"]
+run = """
+set -eu
+mkdir -p dist
+cp target/xtensa-esp32s3-none-elf/release/picokubelet dist/picokubelet-esp32s3.elf
+espflash save-image \\
+  --chip esp32s3 \\
+  --flash-size 16mb \\
+  --merge \\
+  --partition-table partitions.csv \\
+  dist/picokubelet-esp32s3.elf \\
+  dist/picokubelet-esp32s3.bin
+if command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 dist/* > dist/SHA256SUMS
+else
+  sha256sum dist/* > dist/SHA256SUMS
+fi
+"""

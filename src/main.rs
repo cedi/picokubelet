@@ -148,9 +148,8 @@ async fn main(spawner: Spawner) -> ! {
         LEASE_RENEW_PERIOD_SECS, STATUS_UPDATE_PERIOD_SECS,
     );
     spawner.spawn(reconcilers::lease::lease_reconciler(shared, identity.clone()).unwrap());
-    spawner.spawn(
-        reconcilers::status::status_reconciler(shared, identity, tracker, custom).unwrap(),
-    );
+    spawner
+        .spawn(reconcilers::status::status_reconciler(shared, identity, tracker, custom).unwrap());
 
     loop {
         Timer::after(Duration::from_secs(3600)).await;

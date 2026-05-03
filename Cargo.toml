@@ -13,6 +13,16 @@ name = "picokubelet"
 path = "src/main.rs"
 
 [dependencies]
+embassy-time = { version = "0.5" }
+# Xtensa LX7 doesn't have native u64 atomics; portable-atomic emulates them
+# via critical sections (already provided by esp-hal).
+portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
+
+# --- Utility ---
+heapless = "0.8"
+log = "0.4"
+
+[target.'cfg(target_arch = "xtensa")'.dependencies]
 # --- Core esp-rs stack ---
 esp-hal = { version = "1.1", features = ["esp32s3", "unstable"] }
 # esp-rtos is the successor to esp-hal-embassy; provides the embassy
@@ -27,7 +37,6 @@ esp-println = { version = "0.17", default-features = false, features = ["esp32s3
 
 # --- Embassy ---
 embassy-executor = { version = "0.10" }
-embassy-time = { version = "0.5" }
 embassy-sync = { version = "0.8" }
 embassy-net = { version = "0.9", features = [
     "dhcpv4",
@@ -51,14 +60,9 @@ embedded-tls = { version = "0.18", default-features = false, features = ["log"] 
 embedded-io-async = { version = "0.7", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
-# Xtensa LX7 doesn't have native u64 atomics; portable-atomic emulates them
-# via critical sections (already provided by esp-hal).
-portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
 
 # --- Utility ---
 static_cell = "2.1"
-heapless = "0.8"
-log = "0.4"
 
 [profile.release]
 codegen-units = 1

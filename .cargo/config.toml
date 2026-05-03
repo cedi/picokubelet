@@ -1,6 +1,10 @@
 [build]
 target = "xtensa-esp32s3-none-elf"
 
+[alias]
+host-test = "test --target aarch64-apple-darwin --lib -Z build-std=std,panic_abort"
+ci-host-test = "test --target x86_64-unknown-linux-gnu --lib -Z build-std=std,panic_abort"
+
 [target.xtensa-esp32s3-none-elf]
 runner = "espflash flash --monitor --partition-table partitions.csv"
 rustflags = [

@@ -230,3 +230,91 @@ impl HeapAnnotationPatch {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::net::Ipv4Addr;
+
+    use heapless::String as HString;
+
+    use super::{CustomCondEntry, HeapAnnotationPatch, LeaseBody, NodeRegistration, NodeStatusPatch};
+    use crate::config::{LEASE_DURATION_SECS, NODE_NAME};
+    use crate::k8s::conditions::{CondStatus, CustomCond, NodeCondTracker};
+
+    #[test]
+    fn lease_body_contains_name_namespace_duration_and_renew_time() {
+        let mut out: HString<512> = HString::new();
+
+        (LeaseBody {
+            renew_unix: 1_777_736_837,
+        })
+        .write_json(&mut out)
+        .expect("lease body fits");
+
+        assert!(out.contains(r#""kind":"Lease""#));
+        assert!(out.contains(r#""namespace":"kube-node-lease""#));
+        assert!(out.contains(NODE_NAME));
+        assert!(out.contains(r#""leaseDurationSeconds":40"#));
+        assert!(out.contains(r#""renewTime":"2026-05-02T15:47:17.000000Z""#));
+        assert_eq!(LEASE_DURATION_SECS, 40);
+    }
+
+    #[test]
+    fn status_patch_writes_custom_conditions_after_builtin_conditions() {
+        let tracker = NodeCondTracker::new(1_777_736_800);
+        let custom = [CustomCondEntry {
+            name: "Vibes",
+            current: CustomCond {
+                status: CondStatus::True,
+                reason: "Immaculate",
+                message: "freshly booted, heap abundant",
+            },
+            transitioned_at: 1_777_736_837,
+        }];
+        let mut out: HString<3072> = HString::new();
+
+        (NodeStatusPatch {
+            tracker: &tracker,
+            custom: &custom,
+            heartbeat_unix: 1_777_736_837,
+        })
+        .write_json(&mut out)
+        .expect("status body fits");
+
+        let ready = out.find(r#""type":"Ready""#).expect("Ready condition");
+        let vibes = out.find(r#""type":"Vibes""#).expect("Vibes condition");
+
+        assert!(ready < vibes);
+        assert!(out.contains(r#""lastHeartbeatTime":"2026-05-02T15:47:17.000000Z""#));
+        assert!(out.contains(r#""reason":"Immaculate""#));
+    }
+
+    #[test]
+    fn heap_annotation_serializes_free_bytes_as_string_annotation() {
+        let mut out: HString<256> = HString::new();
+
+        (HeapAnnotationPatch { free_bytes: 12345 })
+            .write_json(&mut out)
+            .expect("annotation body fits");
+
+        assert_eq!(
+            out.as_str(),
+            r#"{"metadata":{"annotations":{"node.specht.dev/heap-bytes-free":"12345"}}}"#,
+        );
+    }
+
+    #[test]
+    fn node_registration_uses_supplied_ip_as_internal_address() {
+        let mut out: HString<2048> = HString::new();
+
+        (NodeRegistration {
+            ip: Ipv4Addr::new(10, 42, 0, 7),
+            now_unix: 1_777_736_837,
+        })
+        .write_json(&mut out)
+        .expect("node registration fits");
+
+        assert!(out.contains(r#""type":"InternalIP","address":"10.42.0.7""#));
+        assert!(out.contains(r#""kubernetes.io/hostname""#));
+    }
+}

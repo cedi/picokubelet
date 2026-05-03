@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ESPFLASH_SKIP_UPDATE_CHECK: "1"
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  K3S_API_HOST: 127.0.0.1
+  K3S_API_PORT: "6443"
+  K3S_TOKEN: release-token
+  WIFI_SSID: release-ssid
+  WIFI_PSK: release-password
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish firmware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache project toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-home
+            .rustup-home
+            target
+          key: ${{ runner.os }}-release-${{ hashFiles('.mise.toml', 'Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-release-
+
+      - name: Run host unit tests
+        run: mise run ci-host-test
+
+      - name: Package firmware artifacts
+        run: mise run package-release
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: picokubelet-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: main-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "picokubelet ${GITHUB_SHA::7}" \
+            --notes "Automated firmware release for main commit ${GITHUB_SHA}."

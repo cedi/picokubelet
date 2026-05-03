@@ -6,7 +6,6 @@
 //!  4. PATCH initial status so every condition has a fresh
 //!     lastHeartbeatTime out of the gate.
 
-use core::fmt::Write as FmtWrite;
 use core::net::Ipv4Addr;
 
 use embassy_time::Instant;
@@ -18,7 +17,10 @@ use crate::k8s::conditions::{
     CustomCondInputs, CustomCondTracker, NodeCondTracker, eval_caffeinated, eval_existential,
     eval_haunted, eval_peckish, eval_vibes,
 };
-use crate::k8s::models::{CustomCondEntry, HeapAnnotationPatch, LeaseBody, NodeRegistration, NodeStatusPatch};
+use crate::k8s::models::{
+    CustomCondEntry, HeapAnnotationPatch, LeaseBody, NodeRegistration, NodeStatusPatch,
+};
+use crate::k8s::path::ApiPath;
 use crate::net::client::SharedClient;
 use crate::wallclock::{parse_http_date, set_wall_clock, unix_now_secs};
 
@@ -26,25 +28,21 @@ use crate::wallclock::{parse_http_date, set_wall_clock, unix_now_secs};
 pub struct NodeIdentity {
     pub name: &'static str,
     pub ip: Ipv4Addr,
-    pub lease_path: HString<128>,
-    pub status_path: HString<128>,
-    pub node_path: HString<128>,
+    pub lease_path: ApiPath<128>,
+    pub status_path: ApiPath<128>,
+    pub node_path: ApiPath<128>,
 }
 
 impl NodeIdentity {
     pub fn new(ip: Ipv4Addr) -> Self {
         let name = NODE_NAME;
-        let mut lease_path: HString<128> = HString::new();
-        write!(
-            &mut lease_path,
+        let lease_path = ApiPath::new(format_args!(
             "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/{}",
             name,
-        )
+        ))
         .unwrap();
-        let mut status_path: HString<128> = HString::new();
-        write!(&mut status_path, "/api/v1/nodes/{}/status", name).unwrap();
-        let mut node_path: HString<128> = HString::new();
-        write!(&mut node_path, "/api/v1/nodes/{}", name).unwrap();
+        let status_path = ApiPath::new(format_args!("/api/v1/nodes/{}/status", name)).unwrap();
+        let node_path = ApiPath::new(format_args!("/api/v1/nodes/{}", name)).unwrap();
         Self {
             name,
             ip,
@@ -116,7 +114,10 @@ async fn register_node(client: &SharedClient, identity: &NodeIdentity) {
     let mut c = client.lock().await;
     match c.post("/api/v1/nodes", node_body.as_bytes()).await {
         Ok(resp) => match resp.status {
-            201 => info!("node registered ({}); control plane has accepted the bit", identity.name),
+            201 => info!(
+                "node registered ({}); control plane has accepted the bit",
+                identity.name
+            ),
             409 => info!("node already exists, that's fine"),
             other => warn!(
                 "unexpected status {} on Node POST: {}",
@@ -246,7 +247,7 @@ async fn push_initial_status(
     {
         let mut c = client.lock().await;
         match c
-            .patch_strategic(&identity.status_path, body.as_bytes())
+            .patch_strategic(identity.status_path.as_str(), body.as_bytes())
             .await
         {
             Ok(resp) => match resp.status {
@@ -269,7 +270,10 @@ async fn push_initial_status(
         return;
     }
     let mut c = client.lock().await;
-    match c.patch_merge(&identity.node_path, ann.as_bytes()).await {
+    match c
+        .patch_merge(identity.node_path.as_str(), ann.as_bytes())
+        .await
+    {
         Ok(resp) if resp.status == 200 => {}
         Ok(resp) => warn!("annotation PATCH returned {}", resp.status),
         Err(e) => warn!("annotation PATCH failed: {:?}", e),

@@ -97,3 +97,40 @@ pub fn fmt_rfc3339(unix: u64, out: &mut HString<40>) -> Result<(), core::fmt::Er
         y, m, d, h, mi, s
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use heapless::String as HString;
+
+    use super::{fmt_rfc3339, parse_http_date, unix_from_ymdhms};
+
+    #[test]
+    fn parses_http_date_from_kubernetes_version_response() {
+        assert_eq!(
+            parse_http_date("Sat, 02 May 2026 15:47:17 GMT"),
+            Some(1_777_736_837),
+        );
+    }
+
+    #[test]
+    fn rejects_non_http_date_months() {
+        assert_eq!(parse_http_date("Sat, 02 Wat 2026 15:47:17 GMT"), None);
+    }
+
+    #[test]
+    fn formats_kubernetes_timestamp_with_microseconds() {
+        let mut out: HString<40> = HString::new();
+
+        fmt_rfc3339(1_777_736_837, &mut out).expect("timestamp fits");
+
+        assert_eq!(out.as_str(), "2026-05-02T15:47:17.000000Z");
+    }
+
+    #[test]
+    fn unix_conversion_handles_leap_day() {
+        assert_eq!(
+            unix_from_ymdhms(2024, 2, 29, 0, 0, 0),
+            1_709_164_800,
+        );
+    }
+}

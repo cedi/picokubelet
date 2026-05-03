@@ -60,7 +60,7 @@ impl NodeCondTracker {
 // state ones that show up in `kubectl describe node`. The joke is the
 // reason/message strings; the inputs are real.
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CondStatus {
     True,
     False,
@@ -300,5 +300,143 @@ pub fn eval_haunted(i: &CustomCondInputs) -> CustomCond {
             reason: "Calm",
             message: "no ghosts this interval",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CondState, CondStatus, CustomCondInputs, CustomCondState, eval_caffeinated,
+        eval_existential, eval_haunted, eval_peckish, eval_vibes,
+    };
+    use crate::config::{
+        CAFFEINATED_FRESH_SECS, HEAP_TOTAL_BYTES, MEMORY_PRESSURE_FREE_BYTES,
+        VIBES_CURSED_RECONNECTS,
+    };
+
+    fn inputs() -> CustomCondInputs {
+        CustomCondInputs {
+            heap_free_bytes: HEAP_TOTAL_BYTES,
+            uptime_secs: 1,
+            wifi_reconnects_5min: 0,
+            renewal_count: 0,
+            bssid_changed: false,
+            time_slipped: false,
+        }
+    }
+
+    #[test]
+    fn cond_state_tracks_transition_time_only_on_flips() {
+        let mut state = CondState::new(false, 10);
+
+        assert!(!state.observe(false, 20));
+        assert_eq!(state.transitioned_at, 10);
+
+        assert!(state.observe(true, 30));
+        assert!(state.value);
+        assert_eq!(state.transitioned_at, 30);
+    }
+
+    #[test]
+    fn custom_conditions_start_unknown_so_first_real_value_forces_patch() {
+        let mut state = CustomCondState::new(10);
+
+        assert!(state.observe(CondStatus::True, 11));
+        assert_eq!(state.transitioned_at, 11);
+
+        assert!(!state.observe(CondStatus::True, 12));
+        assert_eq!(state.transitioned_at, 11);
+    }
+
+    #[test]
+    fn heap_percent_is_capped_at_total_heap() {
+        let i = CustomCondInputs {
+            heap_free_bytes: HEAP_TOTAL_BYTES * 3,
+            ..inputs()
+        };
+
+        assert_eq!(i.heap_pct_free(), 100);
+    }
+
+    #[test]
+    fn vibes_prefers_cursed_reconnects_over_good_heap() {
+        let i = CustomCondInputs {
+            wifi_reconnects_5min: VIBES_CURSED_RECONNECTS,
+            ..inputs()
+        };
+
+        let cond = eval_vibes(&i);
+        assert_eq!(cond.status, CondStatus::False);
+        assert_eq!(cond.reason, "Cursed");
+    }
+
+    #[test]
+    fn vibes_reports_immaculate_on_fresh_stable_boot() {
+        let cond = eval_vibes(&inputs());
+
+        assert_eq!(cond.status, CondStatus::True);
+        assert_eq!(cond.reason, "Immaculate");
+    }
+
+    #[test]
+    fn caffeinated_turns_decaf_after_fresh_window() {
+        let i = CustomCondInputs {
+            uptime_secs: CAFFEINATED_FRESH_SECS,
+            ..inputs()
+        };
+
+        let cond = eval_caffeinated(&i);
+        assert_eq!(cond.status, CondStatus::False);
+        assert_eq!(cond.reason, "Decaf");
+    }
+
+    #[test]
+    fn existential_thresholds_are_monotonic() {
+        let innocent = eval_existential(&CustomCondInputs {
+            renewal_count: 99,
+            ..inputs()
+        });
+        let questioning = eval_existential(&CustomCondInputs {
+            renewal_count: 100,
+            ..inputs()
+        });
+        let accepting = eval_existential(&CustomCondInputs {
+            renewal_count: 1_000,
+            ..inputs()
+        });
+        let transcendent = eval_existential(&CustomCondInputs {
+            renewal_count: 10_000,
+            ..inputs()
+        });
+
+        assert_eq!(innocent.reason, "Innocent");
+        assert_eq!(questioning.reason, "Questioning");
+        assert_eq!(accepting.reason, "Accepting");
+        assert_eq!(transcendent.reason, "Transcendent");
+    }
+
+    #[test]
+    fn peckish_defers_to_memory_pressure_threshold() {
+        let i = CustomCondInputs {
+            heap_free_bytes: MEMORY_PRESSURE_FREE_BYTES - 1,
+            ..inputs()
+        };
+
+        let cond = eval_peckish(&i);
+        assert_eq!(cond.status, CondStatus::True);
+        assert_eq!(cond.reason, "Hungry");
+    }
+
+    #[test]
+    fn haunted_prefers_new_bssid_over_time_slip() {
+        let i = CustomCondInputs {
+            bssid_changed: true,
+            time_slipped: true,
+            ..inputs()
+        };
+
+        let cond = eval_haunted(&i);
+        assert_eq!(cond.status, CondStatus::True);
+        assert_eq!(cond.reason, "NewGhost");
     }
 }
