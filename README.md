@@ -13,6 +13,10 @@ esp-node-01-guenther   Ready    <none>                 4m53s   v1.31.1-picokubel
 
 [![asciicast](https://asciinema.org/a/1004944.svg)](https://asciinema.org/a/1004944)
 
+<p align="center">
+    <img alt="kubectl describe node output" height="400" src="out.png">
+</p>
+
 ## What this is
 
 `picokubelet` is a Kubernetes kubelet, written in Rust, targeting the ESP32-S3. It boots, gets a DHCP lease over Wi-Fi, talks TLS to a real k3s API server, registers itself as a node, and renews its lease so the control plane keeps believing it. As far as the cluster is concerned, it is a worker.
