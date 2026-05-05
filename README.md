@@ -116,7 +116,7 @@ cargo build --release
 espflash flash --monitor target/xtensa-esp32s3-none-elf/release/picokubelet
 ```
 
-The dev loop currently runs over Wi-Fi; PoE+Ethernet via the on-board W5500 is the intended production setup but the code path isn't there yet. If you're new to Rust on Espressif chips, the [esp-rs book](https://docs.esp-rs.org/book/) is the right starting point. The Xtensa toolchain situation is what it is; `espup` makes it bearable.
+The dev loop currently runs over Wi-Fi; PoE+Ethernet via the on-board W5500 is the intended production setup but the code path isn't there yet. If you're new to Rust on Espressif chips, the [esp-rs book](https://docs.espressif.com/projects/rust/book/) is the right starting point. The Xtensa toolchain situation is what it is; `espup` makes it bearable.
 
 ## FAQ
 
